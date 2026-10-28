@@ -95,54 +95,53 @@ Operator unit tests (no Postgres): `PYTHONPATH=include pytest tests/ -q`.
 
 ## Sample timings (measured)
 
-Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon, 16 GiB RAM, Linux 6.12 x86_64, Airflow 3.3.2 LocalExecutor (`apache/airflow:3.3.2-python3.12`), PostgreSQL 18.6 (`postgres:18`), DuckDB 2.0.0. **N = `BENCH_ROW_COUNT` = 1,000,000**. Durations are seconds from `include/results/*.json`. Operator rows are Airflow `TaskInstance.duration` (or `SQLInsertRowsOperator.execute()` wall time). Speedup is traditional / ADBC unless noted.
+Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon, 16 GiB RAM, Linux 6.12 x86_64, Airflow 3.3.2 LocalExecutor (`apache/airflow:3.3.2-python3.12`), PostgreSQL 18.6 (`postgres:18`), DuckDB 2.0.0, unixODBC + psqlODBC. **N = `BENCH_ROW_COUNT` = 1,000,000**. Durations are seconds from `include/results/*.json`. Operator rows are Airflow `TaskInstance.duration` (or `SQLInsertRowsOperator.execute()` wall time). Timed operator tasks ran serially. Speedup is traditional / ADBC unless noted.
 
-Hook-level and DuckDB/SQLite numbers below are from the PG18 / DuckDB 2.0.0 run on `main` (PR #4). **Operator-level rows that add ODBC / `SQLInsertRowsOperator` / `SQLBulkLoadOperator` are TBD until this branch’s N=1e6 re-bench** — they are not copied from the previous run and will not be invented.
-
-### Stock operator matrix (TBD — measure on this stack)
+### Stock operator matrix (same SQL / same N)
 
 | Operator | PostgresHook (libpq) | OdbcHook (psqlODBC) | AdbcHook | Arrow-aware |
 | --- | --- | --- | --- | --- |
-| `SQLExecuteQueryOperator` | TBD | TBD | TBD | n/a |
-| `SQLInsertRowsOperator` | TBD | TBD | TBD | none (stock) |
-| `SQLBulkLoadOperator` | TBD | N/A (`NotImplementedError`) | N/A (`NotImplementedError`) | n/a |
-| `GenericTransfer` | TBD | TBD | TBD | `AdbcArrowTransfer` TBD |
+| `SQLExecuteQueryOperator` | 2.532 s / 394,909 rows/s | 2.487 s / 402,129 rows/s | 2.459 s / 406,703 rows/s | n/a (server `INSERT...SELECT`) |
+| `SQLInsertRowsOperator` | 11.781 s / 84,883 rows/s | 59.047 s / 16,936 rows/s | 28.453 s / 35,146 rows/s | none (stock) |
+| `SQLBulkLoadOperator` | 1.611 s / 620,801 rows/s (`COPY`) | N/A (`bulk_load` NotImplementedError) | N/A (`bulk_load` NotImplementedError) | n/a |
+| `GenericTransfer` | 14.584 s / 68,570 rows/s | 65.187 s / 15,341 rows/s | 31.209 s / 32,042 rows/s | `AdbcArrowTransfer` below |
 
-### Stock GenericTransfer vs AdbcArrowTransfer (previous serialized-parallel run; will be replaced)
+Server-side `SQLExecuteQueryOperator` barely moves with hook choice. Row `insert_rows` (SQLInsertRows / GenericTransfer) is slowest on ODBC, then ADBC, then libpq. Native `COPY` is the fastest stock load on Postgres.
+
+### Stock GenericTransfer vs AdbcArrowTransfer
 
 Same Airflow transfer-operator interface (`source_conn_id`, `destination_conn_id`, SQL, dest table). Stock `GenericTransfer` always dest-writes with `insert_rows`, even when the connection type is `adbc` or `odbc`. Custom `AdbcArrowTransfer` (`include/operators/adbc_arrow_transfer.py`) dest-writes with `cursor.adbc_ingest`.
 
 | Path | Time | Dest write |
 | --- | --- | --- |
-| Stock `GenericTransfer` traditional | 18.614 s / 53,723 rows/s | `PostgresHook.insert_rows` |
-| Stock `GenericTransfer` ODBC dest | TBD | `OdbcHook.insert_rows` |
-| Stock `GenericTransfer` ADBC dest | 29.991 s / 33,344 rows/s | `AdbcHook.insert_rows` (row-based; dest `price` is float8) |
-| `AdbcArrowTransfer` traditional source | 6.525 s / 153,261 rows/s | `adbc_ingest` into NUMERIC |
-| `AdbcArrowTransfer` ADBC source | 6.468 s / 154,613 rows/s | `adbc_ingest` into NUMERIC (**4.64x** vs stock ADBC `insert_rows`) |
+| Stock `GenericTransfer` traditional | 14.584 s / 68,570 rows/s | `PostgresHook.insert_rows` |
+| Stock `GenericTransfer` ODBC dest | 65.187 s / 15,341 rows/s | `OdbcHook.insert_rows` (row-based; dest `price` is float8) |
+| Stock `GenericTransfer` ADBC dest | 31.209 s / 32,042 rows/s | `AdbcHook.insert_rows` (row-based; dest `price` is float8) |
+| `AdbcArrowTransfer` traditional source | 4.035 s / 247,846 rows/s | `adbc_ingest` into NUMERIC |
+| `AdbcArrowTransfer` ADBC source | 3.371 s / 296,629 rows/s | `adbc_ingest` into NUMERIC (**9.26x** vs stock ADBC `insert_rows`) |
 
-### Other operator / hook-level results
+### Other hook-level / file-engine results
 
 | Workload | Traditional | ADBC | Speedup |
 | --- | --- | --- | --- |
-| Bulk insert (hook, Postgres) | 17.358 s / 57,609 rows/s (`insert_rows`) | 1.793 s / 557,763 rows/s (Arrow ingest) | 9.68x |
-| Bulk select (hook, Postgres) | 1.362 s / 734,120 rows/s (`fetchall`) | 0.544 s / 1,837,101 rows/s (Arrow table) | 2.50x |
-| `SQLExecuteQueryOperator` INSERT...SELECT | 5.430 s / 184,167 rows/s (to be re-measured with ODBC) | 5.860 s / 170,646 rows/s | 0.93x |
-| DuckDB insert (file) | 666.407 s / 1,501 rows/s (`executemany`) | 0.239 s / 4,187,294 rows/s (Arrow ingest) | 2790.44x |
-| DuckDB select (file) | 0.659 s / 1,518,207 rows/s (`fetchall`) | 0.237 s / 4,220,849 rows/s (Arrow table) | 2.78x |
-| SQLite insert (file) | 1.093 s / 914,870 rows/s (`executemany`) | 0.868 s / 1,151,936 rows/s (Arrow ingest) | 1.26x |
-| SQLite select (file) | 0.899 s / 1,112,002 rows/s (`fetchall`) | 0.369 s / 2,711,922 rows/s (Arrow table) | 2.44x |
+| Bulk insert (hook, Postgres) | 18.005 s / 55,539 rows/s (`insert_rows`) | 2.082 s / 480,207 rows/s (Arrow ingest) | 8.65x |
+| Bulk select (hook, Postgres) | 0.960 s / 1,041,853 rows/s (`fetchall`) | 0.426 s / 2,345,880 rows/s (Arrow table) | 2.25x |
+| DuckDB insert (file) | 622.421 s / 1,607 rows/s (`executemany`) | 0.658 s / 1,519,781 rows/s (Arrow ingest) | 945.94x |
+| DuckDB select (file) | 0.691 s / 1,448,040 rows/s (`fetchall`) | 0.178 s / 5,623,198 rows/s (Arrow table) | 3.88x |
+| SQLite insert (file) | 1.078 s / 927,566 rows/s (`executemany`) | 0.813 s / 1,229,461 rows/s (Arrow ingest) | 1.33x |
+| SQLite select (file) | 0.893 s / 1,120,081 rows/s (`fetchall`) | 0.354 s / 2,822,360 rows/s (Arrow table) | 2.52x |
 
 `SQLExecuteQueryOperator` is server-side `INSERT...SELECT`, so hook choice barely moves the number. DuckDB traditional insert is `executemany` of 1e6 Python tuples vs one Arrow ingest. Re-run locally: hardware and cache state will move the digits.
 
 ### Hook ETL (different workload; not 1:1 vs transfer operators)
 
-`bench_transfer` times a **Python callable** (extract + 10% price discount + load), not `GenericTransfer` / `AdbcArrowTransfer`. Do not rank Hook ETL ADBC (~2.5 s) against the operator table above.
+`bench_transfer` times a **Python callable** (extract + 10% price discount + load), not `GenericTransfer` / `AdbcArrowTransfer`. Do not rank Hook ETL ADBC (~2.7 s) against the operator table above.
 
 | Path | Time | What it is |
 | --- | --- | --- |
-| Hook ETL traditional | 19.177 s | `PythonOperator` + `PostgresHook.insert_rows` + 10% discount |
-| Hook ETL ADBC | 2.525 s | `PythonOperator` + Arrow compute + `adbc_ingest` |
-| `AdbcArrowTransfer` in `bench_transfer` | 3.679 s | operator copy, no transform, measured in that DAG’s run |
+| Hook ETL traditional | 21.006 s | `PythonOperator` + `PostgresHook.insert_rows` + 10% discount |
+| Hook ETL ADBC | 2.722 s | `PythonOperator` + Arrow compute + `adbc_ingest` |
+| `AdbcArrowTransfer` in `bench_transfer` | 3.726 s | operator copy, no transform, measured in that DAG’s run |
 
 Footnotes only: different code path (callable vs operator), extra transform on the hook ETL tasks, and a different parallel-task mix than `bench_sql_operators`.
 
