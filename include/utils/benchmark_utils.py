@@ -128,14 +128,22 @@ def sample_rows_to_arrow(data, *, created_at_as_string: bool = False):
 
 
 def product_rows_to_arrow(num_rows: int):
-    """Arrow table matching bench_source (quantity int32, price float64, timestamp us)."""
+    """Arrow table matching bench_source (quantity int32, price decimal128(10,2)).
+
+    ADBC PostgreSQL COPY cannot write Arrow float64 into NUMERIC.
+    """
     import random
     from datetime import datetime
+    from decimal import Decimal
 
     import pyarrow as pa
 
     categories = ["Electronics", "Clothing", "Food", "Books", "Toys"]
     now = datetime.now()
+    price_type = pa.decimal128(10, 2)
+    prices = [
+        Decimal(f"{round(random.uniform(10.0, 1000.0), 2):.2f}") for _ in range(num_rows)
+    ]
     return pa.table(
         {
             "product_name": pa.array(
@@ -144,16 +152,24 @@ def product_rows_to_arrow(num_rows: int):
             "category": pa.array(
                 [random.choice(categories) for _ in range(num_rows)], type=pa.string()
             ),
-            "price": pa.array(
-                [round(random.uniform(10.0, 1000.0), 2) for _ in range(num_rows)],
-                type=pa.float64(),
-            ),
+            "price": pa.array(prices, type=price_type),
             "quantity": pa.array(
                 [random.randint(1, 100) for _ in range(num_rows)], type=pa.int32()
             ),
             "created_at": pa.array([now] * num_rows, type=pa.timestamp("us")),
         }
     )
+
+
+def arrow_numeric_to_float64(column):
+    """Cast a Postgres NUMERIC Arrow column (often opaque string) to float64."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    chunked = column if isinstance(column, pa.ChunkedArray) else pa.chunked_array([column])
+    combined = chunked.combine_chunks()
+    storage = combined.storage if hasattr(combined, "storage") else combined
+    return pc.cast(storage, pa.float64())
 
 
 def generate_product_data(num_rows: int) -> list:

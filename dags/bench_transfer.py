@@ -17,6 +17,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'include'))
 from utils.benchmark_utils import (
     BenchmarkTimer,
+    arrow_numeric_to_float64,
     get_bench_batch_size,
     get_bench_row_count,
     product_rows_to_arrow,
@@ -126,10 +127,12 @@ def bench_transfer_adbc(**context):
                 
                 print(f"  Extracted {len(arrow_table):,} rows as Arrow table")
                 
-                # Transform using Arrow compute (apply 10% discount)
-                discounted_prices = pc.multiply(arrow_table['price'], 0.9)
+                # NUMERIC arrives as opaque string; float64 then decimal128 for COPY.
+                discounted_prices = pc.round(
+                    pc.multiply(arrow_numeric_to_float64(arrow_table["price"]), 0.9),
+                    2,
+                ).cast(pa.decimal128(10, 2))
                 
-                # Create new table with transformed data
                 transformed_table = pa.table({
                     'product_name': arrow_table['product_name'],
                     'category': arrow_table['category'],
