@@ -1,5 +1,6 @@
 # Airflow
 logs/
+.airflow_test_home/
 airflow.db
 airflow.cfg
 unittests.cfg
