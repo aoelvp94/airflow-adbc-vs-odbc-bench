@@ -1,0 +1,54 @@
+name: Lint DAGs
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install apache-airflow==2.10.3
+          pip install -r requirements.txt
+      
+      - name: Lint with flake8
+        run: |
+          pip install flake8
+          # Stop the build if there are Python syntax errors or undefined names
+          flake8 dags/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          # Exit-zero treats all errors as warnings
+          flake8 dags/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      
+      - name: Validate DAGs (dry-import)
+        run: |
+          export AIRFLOW_HOME=$(pwd)
+          export AIRFLOW__CORE__DAGS_FOLDER=$(pwd)/dags
+          export AIRFLOW__CORE__LOAD_EXAMPLES=False
+          # List DAGs to ensure they parse correctly
+          python -c "
+          import sys
+          import os
+          sys.path.insert(0, os.path.join(os.getcwd(), 'dags'))
+          sys.path.insert(0, os.path.join(os.getcwd(), 'include'))
+          
+          # Dry import each DAG
+          dag_files = ['bench_bulk_insert.py', 'bench_bulk_select.py', 'bench_transfer.py']
+          for dag_file in dag_files:
+              print(f'Checking {dag_file}...')
+              with open(f'dags/{dag_file}') as f:
+                  exec(compile(f.read(), dag_file, 'exec'))
+              print(f'✓ {dag_file} parsed successfully')
+          print('✅ All DAGs are valid')
+          "

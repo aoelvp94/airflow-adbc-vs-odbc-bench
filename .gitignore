@@ -1,0 +1,40 @@
+# Airflow
+logs/
+airflow.db
+airflow.cfg
+unittests.cfg
+webserver_config.py
+*.pid
+
+# Environment
+.env
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker
+.docker/
+
+# Results (keep directory structure but ignore generated files)
+include/results/*.json
+include/results/*.csv
+
+# OS
+.DS_Store
+Thumbs.db
