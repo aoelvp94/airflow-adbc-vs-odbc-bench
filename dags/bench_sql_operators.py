@@ -1,10 +1,14 @@
 """
-Benchmark: operator-level SQL execute and GenericTransfer.
+Benchmark: operator-level SQL execute, stock GenericTransfer, and AdbcArrowTransfer.
 
 Compares the same Airflow operators on a traditional Postgres connection
 (PostgresHook via conn type postgres) and an ADBC connection (AdbcHook via
-conn type adbc). This is distinct from the hook-level DAGs, which call
-PostgresHook / AdbcHook inside PythonOperator callables.
+conn type adbc). Stock GenericTransfer always uses insert_rows on the dest.
+AdbcArrowTransfer reads the source (get_records or fetch_arrow_table) and
+writes with cursor.adbc_ingest.
+
+Hook-level ETL (Python callables) lives in bench_transfer and is kept as a
+reference for the same Arrow ingest API without an operator wrapper.
 """
 
 from datetime import datetime
@@ -24,13 +28,16 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "include"))
+from operators.adbc_arrow_transfer import AdbcArrowTransfer
 from utils.benchmark_utils import (
     DEFAULT_ROW_COUNT,
+    duration_entry,
     get_bench_row_count,
     product_rows_to_arrow,
     read_operator_duration,
     record_operator_duration,
     save_benchmark_results,
+    write_benchmark_json,
 )
 
 OP_TABLES = (
@@ -38,7 +45,12 @@ OP_TABLES = (
     "bench_op_sql_adbc",
     "bench_op_xfer_traditional",
     "bench_op_xfer_adbc",
+    "bench_op_xfer_arrow_from_pg",
+    "bench_op_xfer_arrow_from_adbc",
 )
+
+# Stock GenericTransfer on ADBC dest still cannot bind NUMERIC via insert_rows.
+FLOAT8_DEST_TABLES = frozenset({"bench_op_xfer_adbc"})
 
 
 def _row_count() -> int:
@@ -76,12 +88,14 @@ def setup_operator_tables(**context):
                 mode="append",
             )
         conn.commit()
-    # AdbcHook.insert_rows cannot bind Python str/float into NUMERIC; GenericTransfer
-    # ADBC dest uses float8 and a CAST in the extract SQL.
-    hook.run(
-        "ALTER TABLE bench_op_xfer_adbc ALTER COLUMN price TYPE DOUBLE PRECISION "
-        "USING price::float8"
-    )
+    # AdbcHook.insert_rows cannot bind Python str/float into NUMERIC; stock
+    # GenericTransfer ADBC dest uses float8 and a CAST in the extract SQL.
+    # AdbcArrowTransfer dest tables keep NUMERIC; ingest uses decimal128.
+    for table in FLOAT8_DEST_TABLES:
+        hook.run(
+            f"ALTER TABLE {table} ALTER COLUMN price TYPE DOUBLE PRECISION "
+            f"USING price::float8"
+        )
     print(f"Operator bench source ready: {row_count} rows")
 
 
@@ -107,18 +121,43 @@ def save_operator_results(**context):
             "note": "Server-side INSERT...SELECT; hook overhead is connection + execute only.",
         },
     )
+    gt_trad = _duration("generic_transfer_traditional")
+    gt_adbc = _duration("generic_transfer_adbc")
     save_benchmark_results(
         benchmark_name="bench_generic_transfer",
-        traditional_time=_duration("generic_transfer_traditional"),
+        traditional_time=gt_trad,
         traditional_rows=row_count,
-        adbc_time=_duration("generic_transfer_adbc"),
+        adbc_time=gt_adbc,
         adbc_rows=row_count,
         metadata={
             "layer": "operator",
             "operator": "GenericTransfer",
             "traditional_conn": "postgres_traditional",
             "adbc_conn": "postgres_adbc",
-            "note": "common.sql GenericTransfer: source get_records + dest insert_rows.",
+            "note": "Stock common.sql GenericTransfer: source get_records + dest insert_rows.",
+        },
+    )
+    arrow_from_pg = _duration("arrow_transfer_from_traditional")
+    arrow_from_adbc = _duration("arrow_transfer_from_adbc")
+    write_benchmark_json(
+        "bench_arrow_transfer",
+        {
+            "row_count": row_count,
+            "stock_generic_transfer_traditional": duration_entry(gt_trad, row_count),
+            "stock_generic_transfer_adbc_insert_rows": duration_entry(gt_adbc, row_count),
+            "adbc_arrow_transfer_from_traditional": duration_entry(arrow_from_pg, row_count),
+            "adbc_arrow_transfer_from_adbc": duration_entry(arrow_from_adbc, row_count),
+            "speedup_vs_stock_adbc_insert_rows": round(gt_adbc / arrow_from_adbc, 2)
+            if arrow_from_adbc > 0
+            else 0,
+            "metadata": {
+                "layer": "operator",
+                "note": (
+                    "Stock GenericTransfer uses dest insert_rows. "
+                    "AdbcArrowTransfer reads source (get_records or fetch_arrow_table) "
+                    "then cursor.adbc_ingest on postgres_adbc."
+                ),
+            },
         },
     )
 
@@ -134,7 +173,7 @@ default_args = {
 with DAG(
     "bench_sql_operators",
     default_args=default_args,
-    description="Benchmark: SQLExecuteQueryOperator and GenericTransfer, Postgres vs ADBC",
+    description="Benchmark: SQLExecuteQueryOperator, GenericTransfer, AdbcArrowTransfer",
     schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
@@ -204,9 +243,37 @@ with DAG(
         on_success_callback=record_operator_duration,
     )
 
+    arrow_from_traditional = AdbcArrowTransfer(
+        task_id="arrow_transfer_from_traditional",
+        source_conn_id="postgres_traditional",
+        destination_conn_id="postgres_adbc",
+        destination_table="bench_op_xfer_arrow_from_pg",
+        sql=extract_sql,
+        preoperator="TRUNCATE TABLE bench_op_xfer_arrow_from_pg",
+        insert_args=insert_fields,
+        on_success_callback=record_operator_duration,
+    )
+    arrow_from_adbc = AdbcArrowTransfer(
+        task_id="arrow_transfer_from_adbc",
+        source_conn_id="postgres_adbc",
+        destination_conn_id="postgres_adbc",
+        destination_table="bench_op_xfer_arrow_from_adbc",
+        sql=extract_sql,
+        preoperator="TRUNCATE TABLE bench_op_xfer_arrow_from_adbc",
+        insert_args=insert_fields,
+        on_success_callback=record_operator_duration,
+    )
+
     save = PythonOperator(
         task_id="save_results",
         python_callable=save_operator_results,
     )
 
-    setup >> [sql_traditional, sql_adbc, xfer_traditional, xfer_adbc] >> save
+    setup >> [
+        sql_traditional,
+        sql_adbc,
+        xfer_traditional,
+        xfer_adbc,
+        arrow_from_traditional,
+        arrow_from_adbc,
+    ] >> save

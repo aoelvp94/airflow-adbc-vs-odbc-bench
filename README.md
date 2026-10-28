@@ -2,7 +2,7 @@
 
 Local Airflow 3.3.2 demo of `AdbcHook` as an **opt-in** beside `OdbcHook` / `DbApiHook` (here, `PostgresHook`), not a replacement. Choose the path from workload and driver availability.
 
-Hook-level DAGs call hooks from `PythonOperator`. Operator-level DAG `bench_sql_operators` runs the same SQL through `SQLExecuteQueryOperator` and `GenericTransfer` on both connection types.
+Hook-level DAGs call hooks from `PythonOperator`. Operator-level DAG `bench_sql_operators` runs the same SQL through `SQLExecuteQueryOperator`, stock `GenericTransfer` (`insert_rows`), and custom `AdbcArrowTransfer` (`adbc_ingest`).
 
 ## Engine matrix
 
@@ -22,7 +22,7 @@ Snowflake, BigQuery, and Databricks are out of scope. This repo does not require
 | --- | --- | --- |
 | Hook | `bench_bulk_insert`, `bench_bulk_select`, `bench_transfer` | `PostgresHook` vs `AdbcHook` inside Python callables (insert_rows / fetchall vs Arrow ingest / `fetch_arrow_table`; hand-rolled ETL) |
 | Hook (local file) | `bench_duckdb`, `bench_sqlite` | Native Python API vs ADBC on a file in the compose volume |
-| Operator | `bench_sql_operators` | Airflow `SQLExecuteQueryOperator` (INSERT...SELECT) and `common.sql` `GenericTransfer` (`get_records` + `insert_rows`) on `postgres_traditional` vs `postgres_adbc`. There is no `PostgresToPostgresOperator` in current providers; `GenericTransfer` is the portable transfer operator. |
+| Operator | `bench_sql_operators` | Airflow `SQLExecuteQueryOperator` (INSERT...SELECT); stock `common.sql` `GenericTransfer` (`get_records` + `insert_rows`); custom `AdbcArrowTransfer` (Arrow extract when source is ADBC, else row extract, then dest `adbc_ingest`). There is no `PostgresToPostgresOperator` in current providers. |
 
 ## Stack
 
@@ -100,17 +100,19 @@ Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon
 - Traditional: `cursor.fetchall()` (list of tuples)
 - ADBC: `AdbcHook` Arrow Table
 
-`bench_transfer` — extract-transform-load in Python:
+`bench_transfer` — extract-transform-load in Python, plus the custom operator for reference:
 
 - Traditional: read rows, process, insert rows
 - ADBC: Arrow table, Arrow compute, Arrow write
+- `AdbcArrowTransfer`: operator-level copy into `postgres_adbc` via Arrow ingest (no transform)
 
 ### Operator-level (Postgres)
 
 `bench_sql_operators`:
 
 - `SQLExecuteQueryOperator` on `postgres_traditional` and `postgres_adbc` (`INSERT ... SELECT`)
-- `GenericTransfer` on the same pair (hook-mediated extract/load)
+- Stock `GenericTransfer` on the same pair (`get_records` + dest `insert_rows`)
+- Custom `AdbcArrowTransfer` from traditional source and from ADBC source; dest is always `adbc_ingest` into NUMERIC
 - Durations are Airflow `TaskInstance.duration` for those operator tasks
 
 ### Hook-level (local files)
@@ -181,12 +183,13 @@ hook = AdbcHook(adbc_conn_id='my_mssql_adbc')
 ├── dags/
 │   ├── bench_bulk_insert.py       # Hook insert (Postgres)
 │   ├── bench_bulk_select.py       # Hook select (Postgres)
-│   ├── bench_transfer.py          # Hook ETL (Postgres)
-│   ├── bench_sql_operators.py     # SQLExecuteQueryOperator + GenericTransfer
+│   ├── bench_transfer.py          # Hook ETL + AdbcArrowTransfer (Postgres)
+│   ├── bench_sql_operators.py     # SQLExecuteQueryOperator + GenericTransfer + AdbcArrowTransfer
 │   ├── bench_duckdb.py            # File-backed DuckDB
 │   └── bench_sqlite.py            # File-backed SQLite
 ├── include/
 │   ├── data/                      # DuckDB / SQLite files
+│   ├── operators/                 # AdbcArrowTransfer (GenericTransfer + adbc_ingest)
 │   ├── results/                   # JSON outputs
 │   └── utils/
 ├── scripts/

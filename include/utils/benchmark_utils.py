@@ -91,6 +91,31 @@ def save_benchmark_results(
     return results
 
 
+def write_benchmark_json(benchmark_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Write an arbitrary results payload (for multi-path operator comparisons)."""
+    results_dir = Path("/opt/airflow/include/results")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    body = {
+        "benchmark": benchmark_name,
+        "timestamp": datetime.now().isoformat(),
+        **payload,
+    }
+    output_file = results_dir / f"{benchmark_name}.json"
+    with open(output_file, "w") as f:
+        json.dump(body, f, indent=2)
+    print(f"✅ Results saved to {output_file}")
+    print(json.dumps(body, indent=2))
+    return body
+
+
+def duration_entry(duration_seconds: float, rows: int) -> Dict[str, Any]:
+    return {
+        "duration_seconds": round(duration_seconds, 3),
+        "rows_processed": rows,
+        "rows_per_second": round(rows / duration_seconds, 2) if duration_seconds > 0 else 0,
+    }
+
+
 def _airflow_variable_get(key: str, default: str) -> str:
     """Read an Airflow Variable without hitting the metadata DB from task code.
 

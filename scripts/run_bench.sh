@@ -120,7 +120,7 @@ echo ""
 trigger_and_wait "bench_transfer" "Transfer Benchmark (hook ETL, Postgres)" || failures=$((failures + 1))
 echo ""
 
-trigger_and_wait "bench_sql_operators" "SQL operators (SQLExecuteQueryOperator + GenericTransfer)" || failures=$((failures + 1))
+trigger_and_wait "bench_sql_operators" "SQL operators (SQLExecuteQueryOperator + GenericTransfer + AdbcArrowTransfer)" || failures=$((failures + 1))
 echo ""
 
 trigger_and_wait "bench_duckdb" "DuckDB file-backed (duckdb API vs ADBC)" || failures=$((failures + 1))
@@ -155,7 +155,28 @@ print_pair "include/results/bench_bulk_insert.json" "Bulk Insert (hook, Postgres
 print_pair "include/results/bench_bulk_select.json" "Bulk Select (hook, Postgres)"
 print_pair "include/results/bench_transfer.json" "Transfer (hook ETL, Postgres)"
 print_pair "include/results/bench_sql_execute.json" "Operator SQLExecuteQueryOperator (Postgres)"
-print_pair "include/results/bench_generic_transfer.json" "Operator GenericTransfer (Postgres)"
+print_pair "include/results/bench_generic_transfer.json" "Operator GenericTransfer stock insert_rows (Postgres)"
+
+if [ -f include/results/bench_arrow_transfer.json ]; then
+    echo "--- Operator AdbcArrowTransfer vs stock GenericTransfer ---"
+    jq -r '
+        "Stock GenericTransfer traditional (insert_rows): \(.stock_generic_transfer_traditional.duration_seconds)s  \(.stock_generic_transfer_traditional.rows_per_second) rows/s",
+        "Stock GenericTransfer ADBC dest (insert_rows):   \(.stock_generic_transfer_adbc_insert_rows.duration_seconds)s  \(.stock_generic_transfer_adbc_insert_rows.rows_per_second) rows/s",
+        "AdbcArrowTransfer traditional source + ingest:   \(.adbc_arrow_transfer_from_traditional.duration_seconds)s  \(.adbc_arrow_transfer_from_traditional.rows_per_second) rows/s",
+        "AdbcArrowTransfer ADBC source + ingest:          \(.adbc_arrow_transfer_from_adbc.duration_seconds)s  \(.adbc_arrow_transfer_from_adbc.rows_per_second) rows/s",
+        "Speedup vs stock ADBC insert_rows:               \(.speedup_vs_stock_adbc_insert_rows)x"
+    ' include/results/bench_arrow_transfer.json
+    echo ""
+fi
+if [ -f include/results/bench_transfer_arrow_operator.json ]; then
+    echo "--- Hook ETL vs AdbcArrowTransfer (same DAG) ---"
+    jq -r '
+        "Hook ETL traditional: \(.hook_etl_traditional.duration_seconds)s  \(.hook_etl_traditional.rows_per_second) rows/s",
+        "Hook ETL ADBC:        \(.hook_etl_adbc.duration_seconds)s  \(.hook_etl_adbc.rows_per_second) rows/s",
+        "AdbcArrowTransfer:    \(.adbc_arrow_transfer.duration_seconds)s  \(.adbc_arrow_transfer.rows_per_second) rows/s"
+    ' include/results/bench_transfer_arrow_operator.json
+    echo ""
+fi
 print_pair "include/results/bench_duckdb_insert.json" "DuckDB insert (file)"
 print_pair "include/results/bench_duckdb_select.json" "DuckDB select (file)"
 print_pair "include/results/bench_sqlite_insert.json" "SQLite insert (file)"
