@@ -15,6 +15,23 @@ echo ""
 # Harder default N (1e6) can take well over 5 minutes per DAG on a laptop/VM.
 MAX_WAIT="${BENCH_DAG_TIMEOUT_SEC:-1800}"
 
+# Quiet CLI: Airflow 2.11 prints plugin INFO / urllib3 warnings on stdout.
+airflow_cli() {
+    docker exec \
+        -e PYTHONWARNINGS=ignore \
+        -e AIRFLOW__LOGGING__LOGGING_LEVEL=ERROR \
+        "$CONTAINER_ID" \
+        airflow "$@"
+}
+
+parse_run_id() {
+    # 2.11 --output json is a one-element array with dag_run_id (not run_id).
+    jq -r '
+        (if type == "array" then .[0] else . end) as $r
+        | ($r.dag_run_id // $r.run_id // empty)
+    '
+}
+
 # Function to trigger DAG and wait
 trigger_and_wait() {
     local dag_id=$1
@@ -23,10 +40,13 @@ trigger_and_wait() {
     echo "Running $dag_name..."
     
     # Trigger DAG
-    run_id=$(docker exec "$CONTAINER_ID" airflow dags trigger "$dag_id" --output json | jq -r '.run_id // empty')
+    local trigger_json
+    trigger_json=$(airflow_cli dags trigger "$dag_id" --output json)
+    run_id=$(printf '%s\n' "$trigger_json" | grep -E '^[\[{]' | parse_run_id)
     
     if [ -z "$run_id" ]; then
         echo "Failed to trigger $dag_id"
+        printf '%s\n' "$trigger_json" | tail -20
         return 1
     fi
     
@@ -35,7 +55,7 @@ trigger_and_wait() {
     
     elapsed=0
     while [ $elapsed -lt "$MAX_WAIT" ]; do
-        state=$(docker exec "$CONTAINER_ID" airflow dags state "$dag_id" "$run_id" 2>/dev/null || echo "running")
+        state=$(airflow_cli dags state "$dag_id" "$run_id" 2>/dev/null | tail -1 | tr -d '[:space:]' || echo "running")
         
         if [ "$state" = "success" ]; then
             echo "   Completed successfully"
@@ -57,12 +77,12 @@ trigger_and_wait() {
 
 # Unpause DAGs
 echo "Unpausing DAGs..."
-docker exec "$CONTAINER_ID" airflow dags unpause bench_bulk_insert
-docker exec "$CONTAINER_ID" airflow dags unpause bench_bulk_select
-docker exec "$CONTAINER_ID" airflow dags unpause bench_transfer
-docker exec "$CONTAINER_ID" airflow dags unpause bench_sql_operators
-docker exec "$CONTAINER_ID" airflow dags unpause bench_duckdb
-docker exec "$CONTAINER_ID" airflow dags unpause bench_sqlite
+airflow_cli dags unpause bench_bulk_insert
+airflow_cli dags unpause bench_bulk_select
+airflow_cli dags unpause bench_transfer
+airflow_cli dags unpause bench_sql_operators
+airflow_cli dags unpause bench_duckdb
+airflow_cli dags unpause bench_sqlite
 echo ""
 
 failures=0

@@ -42,6 +42,9 @@ docker exec "$CONTAINER_ID" airflow connections add postgres_traditional \
     --conn-schema benchdb
 
 # ADBC PostgreSQL. conn-type adbc so SQL operators resolve AdbcHook.
+# db_kwargs.uri is the libpq URL. Putting driver/dialect in extra otherwise
+# leaks them as URI query params and libpq rejects the connect
+# (invalid URI query parameter: "driver").
 echo "Creating 'postgres_adbc' connection..."
 docker exec "$CONTAINER_ID" airflow connections delete postgres_adbc 2>/dev/null || true
 docker exec "$CONTAINER_ID" airflow connections add postgres_adbc \
@@ -51,7 +54,7 @@ docker exec "$CONTAINER_ID" airflow connections add postgres_adbc \
     --conn-login benchuser \
     --conn-password benchpass \
     --conn-schema benchdb \
-    --conn-extra '{"driver": "adbc_driver_postgresql", "dialect": "postgresql"}'
+    --conn-extra '{"driver": "adbc_driver_postgresql", "dialect": "postgresql", "db_kwargs": {"uri": "postgresql://benchuser:benchpass@postgres:5432/benchdb"}}'
 
 # File-backed DuckDB (AdbcHook). Host uses '::' so AdbcHook passes the URI through.
 echo "Creating 'duckdb_adbc' connection..."
