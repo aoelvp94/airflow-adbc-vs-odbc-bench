@@ -79,7 +79,7 @@ services:
         function ver() {
           printf "%04d%04d%04d%04d" $${1//./ }
         }
-        airflow_version=$$(AIRFLOW__LOGGING__LOGGING_LEVEL=INFO && gosu airflow airflow version)
+        airflow_version=$$(AIRFLOW__LOGGING__LOGGING_LEVEL=INFO && airflow version | tail -1)
         airflow_version_comparable=$$(ver $${airflow_version})
         min_airflow_version=2.2.0
         min_airflow_version_comparable=$$(ver $${min_airflow_version})
@@ -134,14 +134,8 @@ services:
         fi
         mkdir -p /sources/logs /sources/dags /sources/plugins /sources/include/results /sources/include/data
         chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins,include}
-        exec /entrypoint airflow db migrate
-        airflow users create \
-          --username airflow \
-          --firstname Airflow \
-          --lastname Admin \
-          --role Admin \
-          --email admin@example.com \
-          --password airflow
+        # entrypoint honors _AIRFLOW_DB_MIGRATE / _AIRFLOW_WWW_USER_CREATE (gosu is not in this image)
+        exec /entrypoint airflow version
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'
