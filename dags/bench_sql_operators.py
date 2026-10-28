@@ -74,6 +74,12 @@ def setup_operator_tables(**context):
                 mode="append",
             )
         conn.commit()
+    # AdbcHook.insert_rows cannot bind Python str/float into NUMERIC; GenericTransfer
+    # ADBC dest uses float8 and a CAST in the extract SQL.
+    hook.run(
+        "ALTER TABLE bench_op_xfer_adbc ALTER COLUMN price TYPE DOUBLE PRECISION "
+        "USING price::float8"
+    )
     print(f"Operator bench source ready: {row_count} rows")
 
 
@@ -140,16 +146,30 @@ with DAG(
         python_callable=setup_operator_tables,
     )
 
-    limit_tpl = f"{{{{ var.value.get('BENCH_ROW_COUNT', {DEFAULT_ROW_COUNT}) }}}}"
+    # Concrete LIMIT: str.format() used for {table} would turn Jinja {{ }} into { }.
+    row_limit = int(os.environ.get("BENCH_ROW_COUNT", DEFAULT_ROW_COUNT))
     insert_select_sql = (
         "INSERT INTO {table} (product_name, category, price, quantity, created_at) "
         "SELECT product_name, category, price, quantity, created_at "
-        f"FROM bench_source LIMIT {limit_tpl}"
+        f"FROM bench_source LIMIT {row_limit}"
     )
     extract_sql = (
         "SELECT product_name, category, price, quantity, created_at "
-        f"FROM bench_source LIMIT {limit_tpl}"
+        f"FROM bench_source LIMIT {row_limit}"
     )
+    extract_sql_adbc = (
+        "SELECT product_name, category, price::float8 AS price, quantity, created_at "
+        f"FROM bench_source LIMIT {row_limit}"
+    )
+    insert_fields = {
+        "target_fields": [
+            "product_name",
+            "category",
+            "price",
+            "quantity",
+            "created_at",
+        ]
+    }
 
     sql_traditional = SQLExecuteQueryOperator(
         task_id="sql_execute_traditional",
@@ -169,14 +189,16 @@ with DAG(
         destination_table="bench_op_xfer_traditional",
         sql=extract_sql,
         preoperator="TRUNCATE TABLE bench_op_xfer_traditional",
+        insert_args=insert_fields,
     )
     xfer_adbc = GenericTransfer(
         task_id="generic_transfer_adbc",
         source_conn_id="postgres_adbc",
         destination_conn_id="postgres_adbc",
         destination_table="bench_op_xfer_adbc",
-        sql=extract_sql,
+        sql=extract_sql_adbc,
         preoperator="TRUNCATE TABLE bench_op_xfer_adbc",
+        insert_args=insert_fields,
     )
 
     save = PythonOperator(

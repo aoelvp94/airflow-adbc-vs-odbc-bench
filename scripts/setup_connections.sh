@@ -54,7 +54,7 @@ docker exec "$CONTAINER_ID" airflow connections add postgres_adbc \
     --conn-login benchuser \
     --conn-password benchpass \
     --conn-schema benchdb \
-    --conn-extra '{"driver": "adbc_driver_postgresql", "dialect": "postgresql", "db_kwargs": {"uri": "postgresql://benchuser:benchpass@postgres:5432/benchdb"}}'
+    --conn-extra '{"driver": "adbc_driver_postgresql", "db_kwargs": {"uri": "postgresql://benchuser:benchpass@postgres:5432/benchdb"}}'
 
 # File-backed DuckDB (AdbcHook). Host uses '::' so AdbcHook passes the URI through.
 echo "Creating 'duckdb_adbc' connection..."
