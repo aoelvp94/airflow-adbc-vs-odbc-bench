@@ -8,8 +8,8 @@ with a DBAPI fallback.
 
 from datetime import datetime
 
-from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import DAG
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 import os
 import sqlite3
@@ -181,7 +181,7 @@ with DAG(
     "bench_sqlite",
     default_args=default_args,
     description="Benchmark: file-backed SQLite, sqlite3 vs ADBC",
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=["benchmark", "adbc", "sqlite"],

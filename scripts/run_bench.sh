@@ -1,10 +1,13 @@
 #!/bin/bash
 set -e
 
-CONTAINER_ID=$(docker compose ps -q airflow-webserver)
+CONTAINER_ID=$(docker compose ps -q airflow-apiserver)
+if [ -z "$CONTAINER_ID" ]; then
+    CONTAINER_ID=$(docker compose ps -q airflow-webserver)
+fi
 
 if [ -z "$CONTAINER_ID" ]; then
-    echo "Airflow webserver container not found. Run 'docker compose up -d' first."
+    echo "Airflow api-server container not found. Run 'docker compose up -d' first."
     exit 1
 fi
 
@@ -15,7 +18,7 @@ echo ""
 # Harder default N (1e6) can take well over 5 minutes per DAG on a laptop/VM.
 MAX_WAIT="${BENCH_DAG_TIMEOUT_SEC:-1800}"
 
-# Quiet CLI: Airflow 2.11 prints plugin INFO / urllib3 warnings on stdout.
+# Quiet CLI: Airflow prints plugin INFO / urllib3 warnings on stdout.
 airflow_cli() {
     docker exec \
         -e PYTHONWARNINGS=ignore \
@@ -25,7 +28,8 @@ airflow_cli() {
 }
 
 parse_run_id() {
-    # 2.11 --output json is a one-element array with dag_run_id (not run_id).
+    # AF 2.11 --output json is a one-element array with dag_run_id.
+    # AF 3 may emit an object with run_id / dag_run_id.
     jq -r '
         (if type == "array" then .[0] else . end) as $r
         | ($r.dag_run_id // $r.run_id // empty)
@@ -55,11 +59,15 @@ trigger_and_wait() {
     
     elapsed=0
     while [ $elapsed -lt "$MAX_WAIT" ]; do
-        # Airflow 2.11 `dags state` takes execution_date, not run_id.
+        # `dags state` historically took execution_date; poll list-runs by run_id.
         state=$(
             airflow_cli dags list-runs -d "$dag_id" -o json 2>/dev/null \
                 | grep -E '^[\[{]' \
-                | jq -r --arg id "$run_id" '.[] | select(.run_id == $id) | .state' \
+                | jq -r --arg id "$run_id" '
+                    (if type == "array" then . else [. ] end)[]
+                    | select((.run_id // .dag_run_id) == $id)
+                    | .state
+                  ' \
                 | head -1
         )
         state=${state:-running}

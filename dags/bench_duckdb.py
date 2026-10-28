@@ -9,8 +9,8 @@ DBAPI fallback to adbc_driver_duckdb.dbapi.connect.
 
 from datetime import datetime
 
-from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import DAG
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 import os
 import sys
@@ -186,7 +186,7 @@ with DAG(
     "bench_duckdb",
     default_args=default_args,
     description="Benchmark: file-backed DuckDB, duckdb API vs ADBC",
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=["benchmark", "adbc", "duckdb"],

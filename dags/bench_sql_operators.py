@@ -9,8 +9,8 @@ PostgresHook / AdbcHook inside PythonOperator callables.
 
 from datetime import datetime
 
-from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import DAG
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -28,6 +28,8 @@ from utils.benchmark_utils import (
     DEFAULT_ROW_COUNT,
     get_bench_row_count,
     product_rows_to_arrow,
+    read_operator_duration,
+    record_operator_duration,
     save_benchmark_results,
 )
 
@@ -85,14 +87,11 @@ def setup_operator_tables(**context):
 
 def save_operator_results(**context):
     """Persist TaskInstance.duration for operator tasks (seconds)."""
-    dag_run = context["dag_run"]
     row_count = _row_count()
 
     def _duration(task_id: str) -> float:
-        ti = dag_run.get_task_instance(task_id)
-        if ti is None or ti.duration is None:
-            raise RuntimeError(f"No duration recorded for task {task_id}")
-        return float(ti.duration)
+        # Airflow 3 tasks cannot ORM-query sibling TaskInstances.
+        return read_operator_duration(task_id)
 
     save_benchmark_results(
         benchmark_name="bench_sql_execute",
@@ -136,7 +135,7 @@ with DAG(
     "bench_sql_operators",
     default_args=default_args,
     description="Benchmark: SQLExecuteQueryOperator and GenericTransfer, Postgres vs ADBC",
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=["benchmark", "adbc", "operator"],
@@ -175,11 +174,13 @@ with DAG(
         task_id="sql_execute_traditional",
         conn_id="postgres_traditional",
         sql=insert_select_sql.format(table="bench_op_sql_traditional"),
+        on_success_callback=record_operator_duration,
     )
     sql_adbc = SQLExecuteQueryOperator(
         task_id="sql_execute_adbc",
         conn_id="postgres_adbc",
         sql=insert_select_sql.format(table="bench_op_sql_adbc"),
+        on_success_callback=record_operator_duration,
     )
 
     xfer_traditional = GenericTransfer(
@@ -190,6 +191,7 @@ with DAG(
         sql=extract_sql,
         preoperator="TRUNCATE TABLE bench_op_xfer_traditional",
         insert_args=insert_fields,
+        on_success_callback=record_operator_duration,
     )
     xfer_adbc = GenericTransfer(
         task_id="generic_transfer_adbc",
@@ -199,6 +201,7 @@ with DAG(
         sql=extract_sql_adbc,
         preoperator="TRUNCATE TABLE bench_op_xfer_adbc",
         insert_args=insert_fields,
+        on_success_callback=record_operator_duration,
     )
 
     save = PythonOperator(

@@ -1,6 +1,6 @@
 # Airflow ADBC vs Traditional Hooks Benchmark
 
-Local Airflow 2.11+ demo of `AdbcHook` as an **opt-in** beside `OdbcHook` / `DbApiHook` (here, `PostgresHook`), not a replacement. Choose the path from workload and driver availability.
+Local Airflow 3.3.2 demo of `AdbcHook` as an **opt-in** beside `OdbcHook` / `DbApiHook` (here, `PostgresHook`), not a replacement. Choose the path from workload and driver availability.
 
 Hook-level DAGs call hooks from `PythonOperator`. Operator-level DAG `bench_sql_operators` runs the same SQL through `SQLExecuteQueryOperator` and `GenericTransfer` on both connection types.
 
@@ -26,10 +26,10 @@ Snowflake, BigQuery, and Databricks are out of scope. This repo does not require
 
 ## Stack
 
-- Apache Airflow 2.11.2, LocalExecutor
+- Apache Airflow 3.3.2 (`apache/airflow:3.3.2-python3.12`), LocalExecutor, api-server + dag-processor
 - PostgreSQL 15 (SQL-server baseline)
 - File-backed DuckDB and SQLite under `include/data/` (no extra service)
-- Providers: `apache-airflow-providers-postgres`, `apache-airflow-providers-apache-arrow` 0.1.1, `apache-airflow-providers-common-sql`
+- Providers: `apache-airflow-providers-postgres` 7.0.2, `apache-airflow-providers-apache-arrow` 0.1.1, `apache-airflow-providers-common-sql` 2.1.1, `apache-airflow-providers-standard` 1.19.0
 - Drivers: `psycopg2-binary`, `adbc-driver-postgresql`, `adbc-driver-sqlite`, `duckdb` (exports `adbc_driver_duckdb`)
 - Docker Compose
 

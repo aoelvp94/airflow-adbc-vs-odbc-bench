@@ -91,6 +91,25 @@ def save_benchmark_results(
     return results
 
 
+def _airflow_variable_get(key: str, default: str) -> str:
+    """Read an Airflow Variable without hitting the metadata DB from task code.
+
+    Airflow 3 tasks must use the Task SDK (`airflow.sdk.Variable`). Fall back to
+    the Airflow 2 `airflow.models.Variable` API, then to the supplied default.
+    """
+    try:
+        from airflow.sdk import Variable
+
+        return str(Variable.get(key, default=default))
+    except Exception:
+        try:
+            from airflow.models import Variable as LegacyVariable
+
+            return str(LegacyVariable.get(key, default_var=default))
+        except Exception:
+            return default
+
+
 def get_bench_row_count() -> int:
     """Row count for all benchmark DAGs.
 
@@ -98,17 +117,39 @@ def get_bench_row_count() -> int:
     else DEFAULT_ROW_COUNT. Transfer and operator DAGs use this same value.
     """
     env_default = os.environ.get("BENCH_ROW_COUNT", str(DEFAULT_ROW_COUNT))
-    from airflow.models import Variable
-
-    return int(Variable.get("BENCH_ROW_COUNT", default_var=env_default))
+    return int(_airflow_variable_get("BENCH_ROW_COUNT", env_default))
 
 
 def get_bench_batch_size() -> int:
     """Traditional Postgres insert batch size (BENCH_BATCH_SIZE)."""
     env_default = os.environ.get("BENCH_BATCH_SIZE", str(DEFAULT_BATCH_SIZE))
-    from airflow.models import Variable
+    return int(_airflow_variable_get("BENCH_BATCH_SIZE", env_default))
 
-    return int(Variable.get("BENCH_BATCH_SIZE", default_var=env_default))
+
+def record_operator_duration(context) -> None:
+    """Persist TaskInstance duration without ORM access (Airflow 3 Task SDK)."""
+    ti = context.get("ti") or context.get("task_instance")
+    duration = getattr(ti, "duration", None)
+    if duration is None:
+        start = getattr(ti, "start_date", None)
+        end = getattr(ti, "end_date", None)
+        if start and end:
+            duration = (end - start).total_seconds()
+    task_id = getattr(ti, "task_id", None) or "unknown"
+    if duration is None:
+        raise RuntimeError(f"No duration recorded for task {task_id}")
+    results_dir = Path("/opt/airflow/include/results")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"task_id": task_id, "duration": float(duration)}
+    (results_dir / f"_ti_duration_{task_id}.json").write_text(json.dumps(payload))
+
+
+def read_operator_duration(task_id: str) -> float:
+    """Read a duration previously stored by record_operator_duration."""
+    path = Path("/opt/airflow/include/results") / f"_ti_duration_{task_id}.json"
+    if not path.exists():
+        raise RuntimeError(f"No duration recorded for task {task_id}")
+    return float(json.loads(path.read_text())["duration"])
 
 
 def sample_rows_to_arrow(data, *, created_at_as_string: bool = False):

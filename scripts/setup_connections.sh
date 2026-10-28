@@ -16,17 +16,21 @@ fi
 BENCH_ROW_COUNT="${BENCH_ROW_COUNT:-1000000}"
 BENCH_BATCH_SIZE="${BENCH_BATCH_SIZE:-1000}"
 
-# Wait for webserver to be available
-until curl -s http://localhost:8080/health | grep -q "healthy"; do
-    echo "Waiting for Airflow webserver..."
+# Wait for api-server (Airflow 3) or webserver (Airflow 2 fallback)
+until curl -sf http://localhost:8080/api/v2/monitor/health >/dev/null \
+    || curl -sf http://localhost:8080/health >/dev/null; do
+    echo "Waiting for Airflow api-server..."
     sleep 2
 done
 
 # Get container ID
-CONTAINER_ID=$(docker compose ps -q airflow-webserver)
+CONTAINER_ID=$(docker compose ps -q airflow-apiserver)
+if [ -z "$CONTAINER_ID" ]; then
+    CONTAINER_ID=$(docker compose ps -q airflow-webserver)
+fi
 
 if [ -z "$CONTAINER_ID" ]; then
-    echo "Could not find airflow-webserver container"
+    echo "Could not find airflow-apiserver container"
     exit 1
 fi
 

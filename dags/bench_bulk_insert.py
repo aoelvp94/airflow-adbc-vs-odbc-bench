@@ -5,11 +5,10 @@ Compares traditional PostgresHook vs AdbcHook for inserting large batches of dat
 """
 
 from datetime import datetime, timedelta
-from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import DAG
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
-import pyarrow as pa
 import sys
 import os
 
@@ -151,7 +150,7 @@ with DAG(
     'bench_bulk_insert',
     default_args=default_args,
     description='Benchmark: Bulk Insert - Traditional vs ADBC',
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=['benchmark', 'adbc', 'insert'],

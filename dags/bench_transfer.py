@@ -5,8 +5,8 @@ Compares traditional PostgresHook vs AdbcHook for extract-transform-load pattern
 """
 
 from datetime import datetime, timedelta
-from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import DAG
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 import pyarrow as pa
@@ -199,7 +199,7 @@ with DAG(
     'bench_transfer',
     default_args=default_args,
     description='Benchmark: Data Transfer (ETL) - Traditional vs ADBC',
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=['benchmark', 'adbc', 'transfer', 'etl'],
