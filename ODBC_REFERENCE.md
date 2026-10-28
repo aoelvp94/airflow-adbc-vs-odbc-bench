@@ -1,10 +1,39 @@
 # ODBC Reference Configuration
 
-This demo uses PostgreSQL with native drivers as the benchmark database. However, the same pattern applies to ODBC connections, particularly for databases like Microsoft SQL Server.
+The default demo compares **protocols against the same PostgreSQL 18**:
 
-## ODBC Connection Example
+| Connection | Protocol | Hook |
+| --- | --- | --- |
+| `postgres_traditional` | libpq | `PostgresHook` |
+| `postgres_odbc` | ODBC (unixODBC + psqlODBC + pyodbc) | `OdbcHook` |
+| `postgres_adbc` | ADBC | `AdbcHook` |
 
-For production ODBC use cases (e.g., MSSQL, Oracle via ODBC):
+ODBC is row-oriented. ADBC is Arrow. JDBC is not in this image.
+
+There is **no SQL Server container** and **no cloud credentials**. FreeTDS + MSSQL in compose is heavier and not required to exercise `OdbcHook` / `GenericTransfer` / `SQLExecuteQueryOperator` / `SQLInsertRowsOperator`. `SQLBulkLoadOperator` cannot run on `OdbcHook` (`bulk_load` is `NotImplementedError`).
+
+`AIRFLOW__PROVIDERS_ODBC__ALLOW_DRIVER_IN_EXTRA=true` is set in compose so the connection extra may name `Driver=PostgreSQL Unicode`.
+
+## Local demo connection (`postgres_odbc`)
+
+Created by `./scripts/setup_connections.sh`:
+
+```bash
+airflow connections add postgres_odbc \
+    --conn-type odbc \
+    --conn-host postgres \
+    --conn-port 5432 \
+    --conn-login benchuser \
+    --conn-password benchpass \
+    --conn-schema benchdb \
+    --conn-extra '{"Driver":"PostgreSQL Unicode","driver":"PostgreSQL Unicode","sqlalchemy_scheme":"postgresql+pyodbc","placeholder":"?"}'
+```
+
+`sqlalchemy_scheme` must be `postgresql+pyodbc`. `OdbcHook` defaults to `mssql+pyodbc`, which would generate the wrong INSERT dialect.
+
+## ODBC Connection Example (MSSQL / vendor driver)
+
+For production ODBC use cases (e.g., MSSQL, Oracle via ODBC) you install a vendor driver. That path is **not** in `./scripts/run_bench.sh`.
 
 ### Traditional ODBC Approach
 
@@ -71,7 +100,7 @@ with hook.get_conn() as conn:
 - Schema: `<database>`
 - Login: `<username>`
 - Password: `<password>`
-- Extra: 
+- Extra:
   ```json
   {
     "driver": "ODBC Driver 18 for SQL Server",
@@ -93,39 +122,24 @@ airflow connections add mssql_odbc \
 
 ### ADBC Connection
 
-**Connection Type**: Generic
+**Connection Type**: `adbc` (this demo) or Generic with an ADBC driver extra.
 
-**Configuration**:
-- Host: `<server>`
-- Port: `1433`
-- Schema: `<database>`
-- Login: `<username>`
-- Password: `<password>`
-- Extra:
-  ```json
-  {
-    "driver": "adbc_driver_flightsql",
-    "adbc.connection.timeout": "30000"
-  }
-  ```
-
-**CLI Command**:
 ```bash
-airflow connections add mssql_adbc \
-    --conn-type generic \
-    --conn-host myserver.database.windows.net \
-    --conn-port 1433 \
-    --conn-login myuser \
-    --conn-password mypassword \
-    --conn-schema mydatabase \
-    --conn-extra '{"driver": "adbc_driver_flightsql"}'
+airflow connections add postgres_adbc \
+    --conn-type adbc \
+    --conn-host postgres \
+    --conn-port 5432 \
+    --conn-login benchuser \
+    --conn-password benchpass \
+    --conn-schema benchdb \
+    --conn-extra '{"driver": "adbc_driver_postgresql", "db_kwargs": {"uri": "postgresql://benchuser:benchpass@postgres:5432/benchdb"}}'
 ```
 
 ## ADBC Driver Availability (2026)
 
 ### Production Ready
 - **PostgreSQL**: `adbc-driver-postgresql` ✅ Stable
-- **SQLite**: `adbc-driver-sqlite` ✅ Stable  
+- **SQLite**: `adbc-driver-sqlite` ✅ Stable
 - **Snowflake**: `adbc-driver-snowflake` ✅ Stable
 - **Flight SQL**: `adbc-driver-flightsql` ✅ Stable
 
@@ -151,52 +165,10 @@ airflow connections add mssql_adbc \
 | **Integration** | ODBC-dependent tools | Arrow/Parquet pipelines |
 | **Driver maturity** | Mature, stable drivers | Newer drivers |
 
-## Performance Expectations
-
-Based on this benchmark and similar patterns:
-
-- **Small transfers (<1k rows)**: Minimal difference
-- **Medium transfers (1k-100k rows)**: 2-5x faster with ADBC
-- **Large transfers (>100k rows)**: 5-10x faster with ADBC
-- **Very large (>1M rows)**: 10-20x faster with ADBC
-
-## Example: Migrating ODBC to ADBC
-
-### Before (ODBC)
-
-```python
-from airflow.providers.standard.operators.python import PythonOperator
-from airflow.sdk import DAG
-from airflow.providers.odbc.hooks.odbc import OdbcHook
-
-def extract_data():
-    hook = OdbcHook(odbc_conn_id='mssql')
-    conn = hook.get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM large_table")
-    rows = cursor.fetchall()
-    # Process rows...
-```
-
-### After (ADBC - when available)
-
-```python
-from airflow.providers.standard.operators.python import PythonOperator
-from airflow.sdk import DAG
-from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
-
-def extract_data():
-    hook = AdbcHook(conn_id='mssql_adbc')
-    with hook.get_conn() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM large_table")
-            arrow_table = cursor.fetch_arrow_table()
-    # Process Arrow table (much faster for large data)...
-```
-
 ## Resources
 
 - [ADBC Specification](https://arrow.apache.org/adbc/)
 - [Airflow Arrow Provider Docs](https://airflow.apache.org/docs/apache-airflow-providers-apache-arrow/stable/)
 - [ADBC Drivers](https://arrow.apache.org/adbc/current/driver/installation.html)
 - [Airflow ODBC Provider](https://airflow.apache.org/docs/apache-airflow-providers-odbc/stable/)
+- [ODBC Connection extra / sqlalchemy_scheme](https://airflow.apache.org/docs/apache-airflow-providers-common-sql/stable/connections.html)

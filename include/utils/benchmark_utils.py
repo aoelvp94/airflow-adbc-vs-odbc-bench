@@ -116,6 +116,20 @@ def duration_entry(duration_seconds: float, rows: int) -> Dict[str, Any]:
     }
 
 
+def skipped_entry(reason: str) -> Dict[str, Any]:
+    """Document a stock operator/hook combo that exists but cannot run."""
+    return {"skipped": True, "reason": reason}
+
+
+def write_task_duration(task_id: str, duration: float) -> None:
+    """Write the same sidecar file record_operator_duration uses."""
+    results_dir = Path("/opt/airflow/include/results")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    (results_dir / f"_ti_duration_{task_id}.json").write_text(
+        json.dumps({"task_id": task_id, "duration": float(duration)})
+    )
+
+
 def _airflow_variable_get(key: str, default: str) -> str:
     """Read an Airflow Variable without hitting the metadata DB from task code.
 

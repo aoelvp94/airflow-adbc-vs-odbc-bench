@@ -41,6 +41,7 @@ include/data/*.duckdb
 include/data/*.duckdb.wal
 include/data/*.sqlite
 include/data/*.sqlite-journal
+include/data/*.tsv
 
 # OS
 .DS_Store
