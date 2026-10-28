@@ -12,8 +12,8 @@ adbc-driver-manager==1.12.0
 adbc-driver-postgresql==1.12.0
 adbc-driver-sqlite==1.12.0
 
-# Local engines (DuckDB wheel also exports adbc_driver_duckdb; not in AF constraints)
-duckdb==1.5.6
+# Local engines (DuckDB 2.0.0 LTS wheel also exports adbc_driver_duckdb; not in AF constraints)
+duckdb==2.0.0
 
 # Data processing (constraints-3.3.2)
 pyarrow==25.0.1

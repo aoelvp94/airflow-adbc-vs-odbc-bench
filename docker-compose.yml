@@ -34,13 +34,16 @@ x-airflow-common:
 
 services:
   postgres:
-    image: postgres:15
+    # Latest stable PostgreSQL 18 (18.6 at time of writing). Do not use 19 RC.
+    image: postgres:18
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
       POSTGRES_DB: airflow
     volumes:
-      - postgres-db-volume:/var/lib/postgresql/data
+      # PG 18+ VOLUME is /var/lib/postgresql (PGDATA=/var/lib/postgresql/18/docker),
+      # not /var/lib/postgresql/data. Wipe this named volume on a 15→18 upgrade.
+      - postgres-db-volume:/var/lib/postgresql
       - ./scripts/init-bench-db.sql:/docker-entrypoint-initdb.d/init-bench-db.sql
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]

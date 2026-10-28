@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir \
 
 RUN python -c "import adbc_driver_postgresql; print('ADBC PostgreSQL driver installed')" \
     && python -c "import adbc_driver_sqlite; print('ADBC SQLite driver installed')" \
-    && python -c "import duckdb, adbc_driver_duckdb; print('DuckDB + ADBC driver installed')" \
+    && python -c "import duckdb, adbc_driver_duckdb; print(f'DuckDB {duckdb.__version__} + ADBC driver installed')" \
     && python -c "import pyarrow; print('PyArrow installed')" \
     && python -c "from airflow.providers.apache.arrow.hooks.adbc import AdbcHook; print('AdbcHook available')" \
     && python -c "from airflow.providers.postgres.hooks.postgres import PostgresHook; print('PostgresHook available')" \

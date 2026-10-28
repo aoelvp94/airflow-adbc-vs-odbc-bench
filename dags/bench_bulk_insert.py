@@ -130,7 +130,7 @@ def save_results(**context):
         metadata={
             "method": "bulk_insert",
             "batch_size_traditional": batch_size,
-            "database": "PostgreSQL 15"
+            "database": "PostgreSQL 18"
         }
     )
     

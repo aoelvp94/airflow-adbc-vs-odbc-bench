@@ -8,8 +8,8 @@ Hook-level DAGs call hooks from `PythonOperator`. Operator-level DAG `bench_sql_
 
 | Engine | Traditional path | ADBC path | Offline | Default runner |
 | --- | --- | --- | --- | --- |
-| PostgreSQL 15 (compose) | `PostgresHook`; `SQLExecuteQueryOperator`; `GenericTransfer` | `AdbcHook`; same operators, conn type `adbc` | Yes | Yes |
-| DuckDB (file in `include/data/`) | `duckdb` Python API | `AdbcHook` + bundled `adbc_driver_duckdb` | Yes | Yes |
+| PostgreSQL 18 (compose `postgres:18`) | `PostgresHook`; `SQLExecuteQueryOperator`; `GenericTransfer` | `AdbcHook`; same operators, conn type `adbc` | Yes | Yes |
+| DuckDB 2.0.0 (file in `include/data/`) | `duckdb` Python API | `AdbcHook` + bundled `adbc_driver_duckdb` | Yes | Yes |
 | SQLite (file in `include/data/`) | stdlib `sqlite3` | `AdbcHook` + `adbc_driver_sqlite` | Yes | Yes |
 | MSSQL / Oracle / Teradata | `OdbcHook` | `AdbcHook` only if a driver exists; MSSQL ADBC is experimental as of 2026 | No (ODBC driver or cloud) | No |
 | Snowflake / BigQuery / Databricks | Vendor hooks | Vendor ADBC drivers | No (accounts / heavy deps) | No |
@@ -27,10 +27,10 @@ Snowflake, BigQuery, and Databricks are out of scope. This repo does not require
 ## Stack
 
 - Apache Airflow 3.3.2 (`apache/airflow:3.3.2-python3.12`), LocalExecutor, api-server + dag-processor
-- PostgreSQL 15 (SQL-server baseline)
-- File-backed DuckDB and SQLite under `include/data/` (no extra service)
+- PostgreSQL 18 (compose `postgres:18`; 18.6 at time of writing — not 19 RC)
+- File-backed DuckDB 2.0.0 LTS and SQLite under `include/data/` (no extra service)
 - Providers: `apache-airflow-providers-postgres` 7.0.2, `apache-airflow-providers-apache-arrow` 0.1.1, `apache-airflow-providers-common-sql` 2.1.1, `apache-airflow-providers-standard` 1.19.0
-- Drivers: `psycopg2-binary`, `adbc-driver-postgresql`, `adbc-driver-sqlite`, `duckdb` (exports `adbc_driver_duckdb`)
+- Drivers: `psycopg2-binary`, `adbc-driver-manager` / `adbc-driver-postgresql` / `adbc-driver-sqlite` 1.12.0 (constraints-3.3.2), `duckdb==2.0.0` (exports `adbc_driver_duckdb`; not in AF constraints)
 - Docker Compose
 
 ## Quick Start
@@ -50,7 +50,8 @@ cd airflow-adbc-vs-odbc-bench
 cp .env.example .env
 grep BENCH_ROW_COUNT .env    # must be 1000000 to match the sample table
 
-# Wipe the postgres volume if this tree previously ran Airflow 2
+# Wipe the postgres volume if this tree previously ran Airflow 2 or PostgreSQL 15
+# (PG 15 and 18 data dirs are incompatible). Also removes old DuckDB 1.x files.
 docker compose down -v
 docker compose up -d --build
 ./scripts/wait_for_airflow.sh
@@ -64,7 +65,7 @@ Operator unit tests (no Postgres): `PYTHONPATH=include pytest tests/ -q`.
 
 ## Sample timings (measured)
 
-Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon, 16 GiB RAM, Linux 6.12 x86_64, Airflow 3.3.2 LocalExecutor (`apache/airflow:3.3.2-python3.12`), PostgreSQL 15. **N = `BENCH_ROW_COUNT` = 1,000,000**. Durations are seconds from `include/results/*.json`. Operator rows are Airflow `TaskInstance.duration`. Speedup is traditional / ADBC unless noted.
+Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon, 16 GiB RAM, Linux 6.12 x86_64, Airflow 3.3.2 LocalExecutor (`apache/airflow:3.3.2-python3.12`), PostgreSQL 18.6 (`postgres:18`), DuckDB 2.0.0. **N = `BENCH_ROW_COUNT` = 1,000,000**. Durations are seconds from `include/results/*.json`. Operator rows are Airflow `TaskInstance.duration`. Speedup is traditional / ADBC unless noted.
 
 ### Stock GenericTransfer vs AdbcArrowTransfer
 
@@ -72,34 +73,34 @@ Same Airflow transfer-operator interface (`source_conn_id`, `destination_conn_id
 
 | Path | Time | Dest write |
 | --- | --- | --- |
-| Stock `GenericTransfer` traditional | 19.629 s / 50,944 rows/s | `PostgresHook.insert_rows` |
-| Stock `GenericTransfer` ADBC dest | 30.429 s / 32,864 rows/s | `AdbcHook.insert_rows` (row-based; dest `price` is float8) |
-| `AdbcArrowTransfer` traditional source | 8.077 s / 123,807 rows/s | `adbc_ingest` into NUMERIC |
-| `AdbcArrowTransfer` ADBC source | 7.984 s / 125,253 rows/s | `adbc_ingest` into NUMERIC (**3.81x** vs stock ADBC `insert_rows`) |
+| Stock `GenericTransfer` traditional | 18.614 s / 53,723 rows/s | `PostgresHook.insert_rows` |
+| Stock `GenericTransfer` ADBC dest | 29.991 s / 33,344 rows/s | `AdbcHook.insert_rows` (row-based; dest `price` is float8) |
+| `AdbcArrowTransfer` traditional source | 6.525 s / 153,261 rows/s | `adbc_ingest` into NUMERIC |
+| `AdbcArrowTransfer` ADBC source | 6.468 s / 154,613 rows/s | `adbc_ingest` into NUMERIC (**4.64x** vs stock ADBC `insert_rows`) |
 
 ### Other operator / hook-level results
 
 | Workload | Traditional | ADBC | Speedup |
 | --- | --- | --- | --- |
-| Bulk insert (hook, Postgres) | 17.735 s / 56,386 rows/s (`insert_rows`) | 1.757 s / 569,012 rows/s (Arrow ingest) | 10.09x |
-| Bulk select (hook, Postgres) | 1.102 s / 907,085 rows/s (`fetchall`) | 0.457 s / 2,189,295 rows/s (Arrow table) | 2.41x |
-| `SQLExecuteQueryOperator` INSERT...SELECT | 6.674 s / 149,825 rows/s | 7.524 s / 132,917 rows/s | 0.89x |
-| DuckDB insert (file) | 528.324 s / 1,893 rows/s (`executemany`) | 0.713 s / 1,401,873 rows/s (Arrow ingest) | 740.64x |
-| DuckDB select (file) | 0.760 s / 1,315,384 rows/s (`fetchall`) | 0.202 s / 4,948,879 rows/s (Arrow table) | 3.76x |
-| SQLite insert (file) | 1.092 s / 916,018 rows/s (`executemany`) | 0.769 s / 1,300,842 rows/s (Arrow ingest) | 1.42x |
-| SQLite select (file) | 0.928 s / 1,077,518 rows/s (`fetchall`) | 0.366 s / 2,730,549 rows/s (Arrow table) | 2.53x |
+| Bulk insert (hook, Postgres) | 17.358 s / 57,609 rows/s (`insert_rows`) | 1.793 s / 557,763 rows/s (Arrow ingest) | 9.68x |
+| Bulk select (hook, Postgres) | 1.362 s / 734,120 rows/s (`fetchall`) | 0.544 s / 1,837,101 rows/s (Arrow table) | 2.50x |
+| `SQLExecuteQueryOperator` INSERT...SELECT | 5.430 s / 184,167 rows/s | 5.860 s / 170,646 rows/s | 0.93x |
+| DuckDB insert (file) | 666.407 s / 1,501 rows/s (`executemany`) | 0.239 s / 4,187,294 rows/s (Arrow ingest) | 2790.44x |
+| DuckDB select (file) | 0.659 s / 1,518,207 rows/s (`fetchall`) | 0.237 s / 4,220,849 rows/s (Arrow table) | 2.78x |
+| SQLite insert (file) | 1.093 s / 914,870 rows/s (`executemany`) | 0.868 s / 1,151,936 rows/s (Arrow ingest) | 1.26x |
+| SQLite select (file) | 0.899 s / 1,112,002 rows/s (`fetchall`) | 0.369 s / 2,711,922 rows/s (Arrow table) | 2.44x |
 
 `SQLExecuteQueryOperator` is server-side `INSERT...SELECT`, so hook choice barely moves the number. DuckDB traditional insert is `executemany` of 1e6 Python tuples vs one Arrow ingest. Re-run locally: hardware and cache state will move the digits.
 
 ### Hook ETL (different workload; not 1:1 vs transfer operators)
 
-`bench_transfer` times a **Python callable** (extract + 10% price discount + load), not `GenericTransfer` / `AdbcArrowTransfer`. Do not rank Hook ETL ADBC (~2.3 s) against the operator table above.
+`bench_transfer` times a **Python callable** (extract + 10% price discount + load), not `GenericTransfer` / `AdbcArrowTransfer`. Do not rank Hook ETL ADBC (~2.5 s) against the operator table above.
 
 | Path | Time | What it is |
 | --- | --- | --- |
-| Hook ETL traditional | 19.708 s | `PythonOperator` + `PostgresHook.insert_rows` + 10% discount |
-| Hook ETL ADBC | 2.337 s | `PythonOperator` + Arrow compute + `adbc_ingest` |
-| `AdbcArrowTransfer` in `bench_transfer` | 3.680 s | operator copy, no transform, measured in that DAG’s run |
+| Hook ETL traditional | 19.177 s | `PythonOperator` + `PostgresHook.insert_rows` + 10% discount |
+| Hook ETL ADBC | 2.525 s | `PythonOperator` + Arrow compute + `adbc_ingest` |
+| `AdbcArrowTransfer` in `bench_transfer` | 3.679 s | operator copy, no transform, measured in that DAG’s run |
 
 Footnotes only: different code path (callable vs operator), extra transform on the hook ETL tasks, and a different parallel-task mix than `bench_sql_operators`.
 
@@ -169,6 +170,9 @@ Tested stack (personal demo; not a guarantee for every 3.x patch):
 [x] apache-airflow-providers-common-sql == 2.1.1   (GenericTransfer, SQLExecuteQueryOperator)
 [x] apache-airflow-providers-standard == 1.19.0    (PythonOperator)
 [x] constraints-3.3.2 / constraints-3.12.txt
+[x] PostgreSQL 18 (compose postgres:18; 18.6 at time of writing — not 19 RC)
+[x] duckdb == 2.0.0 (exports adbc_driver_duckdb; not in AF constraints)
+[x] adbc-driver-manager / adbc-driver-postgresql / adbc-driver-sqlite == 1.12.0 (constraints-3.3.2)
 [x] AdbcHook.get_conn() + cursor.adbc_ingest / fetch_arrow_table
 [x] PostgresHook.insert_rows / get_records / run
 ```
