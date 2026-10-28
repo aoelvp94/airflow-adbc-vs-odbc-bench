@@ -73,6 +73,8 @@ def test_digest_sql_is_server_side_aggregate():
     assert "CAST(price AS numeric(10, 2))" in sql
     assert "FROM bench_op_sql_traditional" in sql
     assert "fetchall" not in sql.lower()
+    # Outer SUM(quantity) needs quantity projected from the hashed subquery.
+    assert "SELECT product_name, quantity, md5(" in sql
 
 
 def test_except_both_ways_sqls():

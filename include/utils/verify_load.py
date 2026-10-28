@@ -90,7 +90,7 @@ def digest_sql(table: str, *, include_price: bool = True) -> str:
         "COALESCE(SUM(quantity), 0)::bigint AS sum_quantity, "
         "md5(COALESCE(string_agg(row_md5, '' ORDER BY product_name), '')) AS digest "
         "FROM ("
-        "SELECT product_name, md5(CONCAT_WS(E'\\x1f', "
+        "SELECT product_name, quantity, md5(CONCAT_WS(E'\\x1f', "
         "product_name, category, "
         f"{price_expr}"
         "CAST(quantity AS text), "
