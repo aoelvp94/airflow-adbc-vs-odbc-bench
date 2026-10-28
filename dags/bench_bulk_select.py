@@ -7,19 +7,22 @@ Compares traditional PostgresHook vs AdbcHook for fetching large result sets.
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.models import Variable
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'include'))
-from utils.benchmark_utils import BenchmarkTimer, save_benchmark_results, generate_sample_data
+from utils.benchmark_utils import (
+    BenchmarkTimer,
+    get_bench_row_count,
+    save_benchmark_results,
+)
 
 
 def populate_test_data(**context):
     """Populate a table with test data for SELECT benchmarks."""
-    row_count = int(Variable.get("BENCH_ROW_COUNT", default_var=100000))
+    row_count = get_bench_row_count()
     
     print(f"🔧 Populating test data: {row_count:,} rows...")
     
@@ -58,7 +61,7 @@ def populate_test_data(**context):
 
 def bench_select_traditional(**context):
     """Fetch rows using traditional PostgresHook."""
-    row_count = int(Variable.get("BENCH_ROW_COUNT", default_var=100000))
+    row_count = get_bench_row_count()
     
     print(f"📊 Traditional SELECT: fetching {row_count:,} rows")
     
@@ -92,7 +95,7 @@ def bench_select_traditional(**context):
 
 def bench_select_adbc(**context):
     """Fetch rows using ADBC (Arrow table)."""
-    row_count = int(Variable.get("BENCH_ROW_COUNT", default_var=100000))
+    row_count = get_bench_row_count()
     
     print(f"📊 ADBC SELECT: fetching {row_count:,} rows as Arrow table")
     

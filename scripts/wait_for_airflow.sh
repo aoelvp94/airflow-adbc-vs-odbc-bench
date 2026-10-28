@@ -3,7 +3,7 @@ set -e
 
 echo "⏳ Waiting for Airflow to be ready..."
 
-max_attempts=60
+max_attempts=120
 attempt=0
 
 while [ $attempt -lt $max_attempts ]; do

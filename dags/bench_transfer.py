@@ -7,7 +7,6 @@ Compares traditional PostgresHook vs AdbcHook for extract-transform-load pattern
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.models import Variable
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 import pyarrow as pa
@@ -16,12 +15,17 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'include'))
-from utils.benchmark_utils import BenchmarkTimer, save_benchmark_results
+from utils.benchmark_utils import (
+    BenchmarkTimer,
+    get_bench_batch_size,
+    get_bench_row_count,
+    save_benchmark_results,
+)
 
 
 def populate_source_data(**context):
     """Populate source table for transfer benchmark."""
-    row_count = int(Variable.get("BENCH_TRANSFER_ROWS", default_var=50000))
+    row_count = get_bench_row_count()
     
     print(f"🔧 Populating source data: {row_count:,} rows...")
     
@@ -60,7 +64,7 @@ def populate_source_data(**context):
 
 def bench_transfer_traditional(**context):
     """Transfer data using traditional PostgresHook (extract + transform + load)."""
-    row_count = int(Variable.get("BENCH_TRANSFER_ROWS", default_var=50000))
+    row_count = get_bench_row_count()
     
     print(f"📊 Traditional Transfer: {row_count:,} rows")
     
@@ -91,7 +95,7 @@ def bench_transfer_traditional(**context):
         print(f"  Transformed {len(transformed_rows):,} rows")
         
         # Load (batch insert)
-        batch_size = 1000
+        batch_size = get_bench_batch_size()
         for i in range(0, len(transformed_rows), batch_size):
             batch = transformed_rows[i:i + batch_size]
             hook.insert_rows(
@@ -117,7 +121,7 @@ def bench_transfer_traditional(**context):
 
 def bench_transfer_adbc(**context):
     """Transfer data using ADBC (Arrow-native extract + transform + load)."""
-    row_count = int(Variable.get("BENCH_TRANSFER_ROWS", default_var=50000))
+    row_count = get_bench_row_count()
     
     print(f"📊 ADBC Transfer: {row_count:,} rows")
     

@@ -9,7 +9,6 @@ with a DBAPI fallback.
 from datetime import datetime
 
 from airflow import DAG
-from airflow.models import Variable
 from airflow.operators.python import PythonOperator
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 import pyarrow as pa
@@ -21,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "include"))
 from utils.benchmark_utils import (
     BenchmarkTimer,
     generate_sample_data,
+    get_bench_row_count,
     save_benchmark_results,
 )
 from utils.local_engines import sqlite_path
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS bench_insert (
 
 
 def _row_count() -> int:
-    return int(Variable.get("BENCH_ROW_COUNT", default_var=100000))
+    return get_bench_row_count()
 
 
 def _open_adbc():

@@ -10,8 +10,8 @@ PostgresHook / AdbcHook inside PythonOperator callables.
 from datetime import datetime
 
 from airflow import DAG
-from airflow.models import Variable
 from airflow.operators.python import PythonOperator
+from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
@@ -24,7 +24,11 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "include"))
-from utils.benchmark_utils import generate_product_data, save_benchmark_results
+from utils.benchmark_utils import (
+    DEFAULT_ROW_COUNT,
+    get_bench_row_count,
+    save_benchmark_results,
+)
 
 OP_TABLES = (
     "bench_op_sql_traditional",
@@ -35,11 +39,14 @@ OP_TABLES = (
 
 
 def _row_count() -> int:
-    return int(Variable.get("BENCH_TRANSFER_ROWS", default_var=50000))
+    return get_bench_row_count()
 
 
 def setup_operator_tables(**context):
     """Create dest tables and load bench_source. Not timed."""
+    import pyarrow as pa
+    import random
+
     row_count = _row_count()
     hook = PostgresHook(postgres_conn_id="postgres_traditional")
     hook.run("TRUNCATE TABLE bench_source;")
@@ -58,12 +65,26 @@ def setup_operator_tables(**context):
         )
         hook.run(f"TRUNCATE TABLE {table};")
 
-    hook.insert_rows(
-        table="bench_source",
-        rows=generate_product_data(row_count),
-        target_fields=["product_name", "category", "price", "quantity", "created_at"],
-        commit_every=1000,
+    # Arrow ingest for setup only; timed paths are the operators below.
+    now = datetime.now()
+    categories = ["Electronics", "Clothing", "Food", "Books", "Toys"]
+    arrow_table = pa.table(
+        {
+            "product_name": [f"Product_{i}" for i in range(row_count)],
+            "category": [random.choice(categories) for _ in range(row_count)],
+            "price": [round(random.uniform(10.0, 1000.0), 2) for _ in range(row_count)],
+            "quantity": [random.randint(1, 100) for _ in range(row_count)],
+            "created_at": [now for _ in range(row_count)],
+        }
     )
+    adbc_hook = AdbcHook(adbc_conn_id="postgres_adbc")
+    with adbc_hook.get_conn() as conn:
+        with conn.cursor() as cursor:
+            cursor.adbc_ingest(
+                table_name="bench_source",
+                data=arrow_table,
+                mode="append",
+            )
     print(f"Operator bench source ready: {row_count} rows")
 
 
@@ -130,7 +151,7 @@ with DAG(
         python_callable=setup_operator_tables,
     )
 
-    limit_tpl = "{{ var.value.get('BENCH_TRANSFER_ROWS', 50000) }}"
+    limit_tpl = f"{{{{ var.value.get('BENCH_ROW_COUNT', {DEFAULT_ROW_COUNT}) }}}}"
     insert_select_sql = (
         "INSERT INTO {table} (product_name, category, price, quantity, created_at) "
         "SELECT product_name, category, price, quantity, created_at "

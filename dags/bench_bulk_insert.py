@@ -7,7 +7,6 @@ Compares traditional PostgresHook vs AdbcHook for inserting large batches of dat
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.models import Variable
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 import pyarrow as pa
@@ -16,7 +15,13 @@ import os
 
 # Add include path for utilities
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'include'))
-from utils.benchmark_utils import BenchmarkTimer, save_benchmark_results, generate_sample_data
+from utils.benchmark_utils import (
+    BenchmarkTimer,
+    generate_sample_data,
+    get_bench_batch_size,
+    get_bench_row_count,
+    save_benchmark_results,
+)
 
 
 def setup_tables(**context):
@@ -34,8 +39,8 @@ def setup_tables(**context):
 
 def bench_insert_traditional(**context):
     """Insert rows using traditional PostgresHook."""
-    row_count = int(Variable.get("BENCH_ROW_COUNT", default_var=100000))
-    batch_size = int(Variable.get("BENCH_BATCH_SIZE", default_var=1000))
+    row_count = get_bench_row_count()
+    batch_size = get_bench_batch_size()
     
     print(f"📊 Traditional Insert: {row_count:,} rows (batch size: {batch_size:,})")
     
@@ -72,7 +77,7 @@ def bench_insert_traditional(**context):
 
 def bench_insert_adbc(**context):
     """Insert rows using ADBC with Arrow batches."""
-    row_count = int(Variable.get("BENCH_ROW_COUNT", default_var=100000))
+    row_count = get_bench_row_count()
     
     print(f"📊 ADBC Insert: {row_count:,} rows (Arrow batches)")
     
@@ -128,7 +133,7 @@ def save_results(**context):
     adbc_duration = ti.xcom_pull(task_ids='insert_adbc', key='adbc_duration')
     adbc_rows = ti.xcom_pull(task_ids='insert_adbc', key='adbc_rows')
     
-    batch_size = int(Variable.get("BENCH_BATCH_SIZE", default_var=1000))
+    batch_size = get_bench_batch_size()
     
     results = save_benchmark_results(
         benchmark_name="bench_bulk_insert",

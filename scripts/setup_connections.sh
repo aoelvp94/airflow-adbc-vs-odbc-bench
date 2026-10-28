@@ -3,6 +3,19 @@ set -e
 
 echo "Setting up Airflow connections..."
 
+# Host-side defaults; Airflow Variables are the runtime knob the DAGs read.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ -f "$REPO_ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO_ROOT/.env"
+    set +a
+fi
+
+BENCH_ROW_COUNT="${BENCH_ROW_COUNT:-1000000}"
+BENCH_BATCH_SIZE="${BENCH_BATCH_SIZE:-1000}"
+
 # Wait for webserver to be available
 until curl -s http://localhost:8080/health | grep -q "healthy"; do
     echo "Waiting for Airflow webserver..."
@@ -19,8 +32,8 @@ fi
 
 # Traditional PostgreSQL (PostgresHook / SQLExecuteQueryOperator / GenericTransfer)
 echo "Creating 'postgres_traditional' connection..."
-docker exec -it $CONTAINER_ID airflow connections delete postgres_traditional 2>/dev/null || true
-docker exec -it $CONTAINER_ID airflow connections add postgres_traditional \
+docker exec "$CONTAINER_ID" airflow connections delete postgres_traditional 2>/dev/null || true
+docker exec "$CONTAINER_ID" airflow connections add postgres_traditional \
     --conn-type postgres \
     --conn-host postgres \
     --conn-port 5432 \
@@ -30,8 +43,8 @@ docker exec -it $CONTAINER_ID airflow connections add postgres_traditional \
 
 # ADBC PostgreSQL. conn-type adbc so SQL operators resolve AdbcHook.
 echo "Creating 'postgres_adbc' connection..."
-docker exec -it $CONTAINER_ID airflow connections delete postgres_adbc 2>/dev/null || true
-docker exec -it $CONTAINER_ID airflow connections add postgres_adbc \
+docker exec "$CONTAINER_ID" airflow connections delete postgres_adbc 2>/dev/null || true
+docker exec "$CONTAINER_ID" airflow connections add postgres_adbc \
     --conn-type adbc \
     --conn-host postgres \
     --conn-port 5432 \
@@ -42,24 +55,23 @@ docker exec -it $CONTAINER_ID airflow connections add postgres_adbc \
 
 # File-backed DuckDB (AdbcHook). Host uses '::' so AdbcHook passes the URI through.
 echo "Creating 'duckdb_adbc' connection..."
-docker exec -it $CONTAINER_ID airflow connections delete duckdb_adbc 2>/dev/null || true
-docker exec -it $CONTAINER_ID airflow connections add duckdb_adbc \
+docker exec "$CONTAINER_ID" airflow connections delete duckdb_adbc 2>/dev/null || true
+docker exec "$CONTAINER_ID" airflow connections add duckdb_adbc \
     --conn-type adbc \
     --conn-host 'file::/opt/airflow/include/data/bench.duckdb' \
     --conn-extra '{"driver": "adbc_driver_duckdb", "entrypoint": "duckdb_adbc_init", "dialect": "duckdb"}'
 
 # File-backed SQLite (AdbcHook)
 echo "Creating 'sqlite_adbc' connection..."
-docker exec -it $CONTAINER_ID airflow connections delete sqlite_adbc 2>/dev/null || true
-docker exec -it $CONTAINER_ID airflow connections add sqlite_adbc \
+docker exec "$CONTAINER_ID" airflow connections delete sqlite_adbc 2>/dev/null || true
+docker exec "$CONTAINER_ID" airflow connections add sqlite_adbc \
     --conn-type adbc \
     --conn-host 'file:/opt/airflow/include/data/bench.sqlite' \
     --conn-extra '{"driver": "adbc_driver_sqlite", "dialect": "sqlite"}'
 
 echo "Setting benchmark variables..."
-docker exec -it $CONTAINER_ID airflow variables set BENCH_ROW_COUNT 100000
-docker exec -it $CONTAINER_ID airflow variables set BENCH_BATCH_SIZE 1000
-docker exec -it $CONTAINER_ID airflow variables set BENCH_TRANSFER_ROWS 50000
+docker exec "$CONTAINER_ID" airflow variables set BENCH_ROW_COUNT "$BENCH_ROW_COUNT"
+docker exec "$CONTAINER_ID" airflow variables set BENCH_BATCH_SIZE "$BENCH_BATCH_SIZE"
 
 echo "Connections and variables configured."
 echo ""
@@ -70,6 +82,5 @@ echo "  - duckdb_adbc: AdbcHook -> file-backed DuckDB"
 echo "  - sqlite_adbc: AdbcHook -> file-backed SQLite"
 echo ""
 echo "Variables set:"
-echo "  - BENCH_ROW_COUNT: 100000"
-echo "  - BENCH_BATCH_SIZE: 1000"
-echo "  - BENCH_TRANSFER_ROWS: 50000"
+echo "  - BENCH_ROW_COUNT: $BENCH_ROW_COUNT"
+echo "  - BENCH_BATCH_SIZE: $BENCH_BATCH_SIZE"

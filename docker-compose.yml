@@ -15,6 +15,11 @@ x-airflow-common:
     AIRFLOW__WEBSERVER__SECRET_KEY: 'a448e6c89b9e3f0e0a4e3c7c5e5f6a8b'
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
     _PIP_ADDITIONAL_REQUIREMENTS: ''
+    BENCH_ROW_COUNT: ${BENCH_ROW_COUNT:-1000000}
+    BENCH_BATCH_SIZE: ${BENCH_BATCH_SIZE:-1000}
+    BENCH_DATA_DIR: ${BENCH_DATA_DIR:-/opt/airflow/include/data}
+    DUCKDB_PATH: ${DUCKDB_PATH:-/opt/airflow/include/data/bench.duckdb}
+    SQLITE_PATH: ${SQLITE_PATH:-/opt/airflow/include/data/bench.sqlite}
   volumes:
     - ./dags:/opt/airflow/dags
     - ./include:/opt/airflow/include

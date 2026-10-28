@@ -1,10 +1,17 @@
 """Shared utilities for benchmark DAGs."""
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Dict, Any
 from datetime import datetime
+
+# Single volume knob for every DAG (insert, select, transfer, operators, DuckDB, SQLite).
+# 1_000_000 is 10x the original insert/select default (100k) and 20x the original
+# transfer/operator default (50k). Override with Airflow Variable or env BENCH_ROW_COUNT.
+DEFAULT_ROW_COUNT = 1_000_000
+DEFAULT_BATCH_SIZE = 1_000
 
 
 class BenchmarkTimer:
@@ -64,7 +71,10 @@ def save_benchmark_results(
             "rows_per_second": round(adbc_rows / adbc_time, 2) if adbc_time > 0 else 0
         },
         "speedup": round(traditional_time / adbc_time, 2) if adbc_time > 0 else 0,
-        "metadata": metadata or {}
+        "metadata": {
+            **(metadata or {}),
+            "row_count": traditional_rows,
+        },
     }
     
     # Save to file
@@ -79,6 +89,26 @@ def save_benchmark_results(
     print(json.dumps(results, indent=2))
     
     return results
+
+
+def get_bench_row_count() -> int:
+    """Row count for all benchmark DAGs.
+
+    Resolution: Airflow Variable BENCH_ROW_COUNT, else env BENCH_ROW_COUNT,
+    else DEFAULT_ROW_COUNT. Transfer and operator DAGs use this same value.
+    """
+    env_default = os.environ.get("BENCH_ROW_COUNT", str(DEFAULT_ROW_COUNT))
+    from airflow.models import Variable
+
+    return int(Variable.get("BENCH_ROW_COUNT", default_var=env_default))
+
+
+def get_bench_batch_size() -> int:
+    """Traditional Postgres insert batch size (BENCH_BATCH_SIZE)."""
+    env_default = os.environ.get("BENCH_BATCH_SIZE", str(DEFAULT_BATCH_SIZE))
+    from airflow.models import Variable
+
+    return int(Variable.get("BENCH_BATCH_SIZE", default_var=env_default))
 
 
 def generate_product_data(num_rows: int) -> list:
