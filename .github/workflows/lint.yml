@@ -41,10 +41,10 @@ jobs:
           export AIRFLOW__CORE__DAGS_FOLDER=$(pwd)/dags
           export AIRFLOW__CORE__LOAD_EXAMPLES=False
           python -c "
+          import importlib.util
           import os
           import sys
 
-          sys.path.insert(0, os.path.join(os.getcwd(), 'dags'))
           sys.path.insert(0, os.path.join(os.getcwd(), 'include'))
 
           dag_files = [
@@ -57,8 +57,10 @@ jobs:
           ]
           for dag_file in dag_files:
               print(f'Checking {dag_file}...')
-              with open(f'dags/{dag_file}') as f:
-                  exec(compile(f.read(), dag_file, 'exec'))
+              path = os.path.join('dags', dag_file)
+              spec = importlib.util.spec_from_file_location(dag_file[:-3], path)
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
               print(f'{dag_file} parsed successfully')
           print('All DAGs are valid')
           "
