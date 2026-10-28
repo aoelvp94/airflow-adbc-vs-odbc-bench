@@ -5,21 +5,25 @@ Compares traditional PostgresHook vs AdbcHook for fetching large result sets.
 """
 
 from datetime import datetime, timedelta
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.models import Variable
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import DAG
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'include'))
-from utils.benchmark_utils import BenchmarkTimer, save_benchmark_results, generate_sample_data
+from utils.benchmark_utils import (
+    BenchmarkTimer,
+    get_bench_row_count,
+    product_rows_to_arrow,
+    save_benchmark_results,
+)
 
 
 def populate_test_data(**context):
     """Populate a table with test data for SELECT benchmarks."""
-    row_count = int(Variable.get("BENCH_ROW_COUNT", default_var=100000))
+    row_count = get_bench_row_count()
     
     print(f"🔧 Populating test data: {row_count:,} rows...")
     
@@ -28,22 +32,9 @@ def populate_test_data(**context):
     # Truncate and populate
     hook.run("TRUNCATE TABLE bench_source;")
     
-    # Use ADBC for fast population (not part of benchmark)
     from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
-    import pyarrow as pa
-    import random
-    
-    # Generate data
-    data = {
-        'product_name': [f'Product_{i}' for i in range(row_count)],
-        'category': [random.choice(['Electronics', 'Clothing', 'Food', 'Books', 'Toys']) for _ in range(row_count)],
-        'price': [round(random.uniform(10.0, 1000.0), 2) for _ in range(row_count)],
-        'quantity': [random.randint(1, 100) for _ in range(row_count)],
-        'created_at': [datetime.now() for _ in range(row_count)]
-    }
-    
-    arrow_table = pa.table(data)
-    
+
+    arrow_table = product_rows_to_arrow(row_count)
     adbc_hook = AdbcHook(adbc_conn_id='postgres_adbc')
     with adbc_hook.get_conn() as conn:
         with conn.cursor() as cursor:
@@ -52,13 +43,14 @@ def populate_test_data(**context):
                 data=arrow_table,
                 mode='append'
             )
+        conn.commit()
     
     print(f"✅ Test data ready: {row_count:,} rows")
 
 
 def bench_select_traditional(**context):
     """Fetch rows using traditional PostgresHook."""
-    row_count = int(Variable.get("BENCH_ROW_COUNT", default_var=100000))
+    row_count = get_bench_row_count()
     
     print(f"📊 Traditional SELECT: fetching {row_count:,} rows")
     
@@ -92,7 +84,7 @@ def bench_select_traditional(**context):
 
 def bench_select_adbc(**context):
     """Fetch rows using ADBC (Arrow table)."""
-    row_count = int(Variable.get("BENCH_ROW_COUNT", default_var=100000))
+    row_count = get_bench_row_count()
     
     print(f"📊 ADBC SELECT: fetching {row_count:,} rows as Arrow table")
     
@@ -160,7 +152,7 @@ with DAG(
     'bench_bulk_select',
     default_args=default_args,
     description='Benchmark: Bulk Select - Traditional vs ADBC',
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=['benchmark', 'adbc', 'select'],

@@ -165,8 +165,8 @@ Based on this benchmark and similar patterns:
 ### Before (ODBC)
 
 ```python
-from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import DAG
 from airflow.providers.odbc.hooks.odbc import OdbcHook
 
 def extract_data():
@@ -181,8 +181,8 @@ def extract_data():
 ### After (ADBC - when available)
 
 ```python
-from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import DAG
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 
 def extract_data():

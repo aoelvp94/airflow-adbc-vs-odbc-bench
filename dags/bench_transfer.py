@@ -2,12 +2,15 @@
 Benchmark: Data Transfer Comparison
 
 Compares traditional PostgresHook vs AdbcHook for extract-transform-load patterns.
+
+Also runs ``AdbcArrowTransfer`` (operator, Arrow ingest, no transform) so the
+suite can compare hook ETL vs stock GenericTransfer vs custom Arrow ingest.
+Stock GenericTransfer lives in ``bench_sql_operators``.
 """
 
 from datetime import datetime, timedelta
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.models import Variable
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import DAG
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 import pyarrow as pa
@@ -16,12 +19,25 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'include'))
-from utils.benchmark_utils import BenchmarkTimer, save_benchmark_results
+from operators.adbc_arrow_transfer import AdbcArrowTransfer
+from utils.benchmark_utils import (
+    DEFAULT_ROW_COUNT,
+    BenchmarkTimer,
+    arrow_numeric_to_float64,
+    duration_entry,
+    get_bench_batch_size,
+    get_bench_row_count,
+    product_rows_to_arrow,
+    read_operator_duration,
+    record_operator_duration,
+    save_benchmark_results,
+    write_benchmark_json,
+)
 
 
 def populate_source_data(**context):
     """Populate source table for transfer benchmark."""
-    row_count = int(Variable.get("BENCH_TRANSFER_ROWS", default_var=50000))
+    row_count = get_bench_row_count()
     
     print(f"🔧 Populating source data: {row_count:,} rows...")
     
@@ -31,21 +47,22 @@ def populate_source_data(**context):
     hook.run("TRUNCATE TABLE bench_source;")
     hook.run("TRUNCATE TABLE bench_dest_traditional;")
     hook.run("TRUNCATE TABLE bench_dest_adbc;")
-    
-    # Use ADBC for fast population
-    import random
+    hook.run(
+        """
+        CREATE TABLE IF NOT EXISTS bench_dest_arrow (
+            id SERIAL PRIMARY KEY,
+            product_name VARCHAR(100),
+            category VARCHAR(50),
+            price NUMERIC(10, 2),
+            quantity INTEGER,
+            created_at TIMESTAMP
+        )
+        """
+    )
+    hook.run("TRUNCATE TABLE bench_dest_arrow;")
     
     adbc_hook = AdbcHook(adbc_conn_id='postgres_adbc')
-    
-    data = {
-        'product_name': [f'Product_{i}' for i in range(row_count)],
-        'category': [random.choice(['Electronics', 'Clothing', 'Food', 'Books', 'Toys']) for _ in range(row_count)],
-        'price': [round(random.uniform(10.0, 1000.0), 2) for _ in range(row_count)],
-        'quantity': [random.randint(1, 100) for _ in range(row_count)],
-        'created_at': [datetime.now() for _ in range(row_count)]
-    }
-    
-    arrow_table = pa.table(data)
+    arrow_table = product_rows_to_arrow(row_count)
     
     with adbc_hook.get_conn() as conn:
         with conn.cursor() as cursor:
@@ -54,13 +71,14 @@ def populate_source_data(**context):
                 data=arrow_table,
                 mode='append'
             )
+        conn.commit()
     
     print(f"✅ Source data ready: {row_count:,} rows")
 
 
 def bench_transfer_traditional(**context):
     """Transfer data using traditional PostgresHook (extract + transform + load)."""
-    row_count = int(Variable.get("BENCH_TRANSFER_ROWS", default_var=50000))
+    row_count = get_bench_row_count()
     
     print(f"📊 Traditional Transfer: {row_count:,} rows")
     
@@ -91,7 +109,7 @@ def bench_transfer_traditional(**context):
         print(f"  Transformed {len(transformed_rows):,} rows")
         
         # Load (batch insert)
-        batch_size = 1000
+        batch_size = get_bench_batch_size()
         for i in range(0, len(transformed_rows), batch_size):
             batch = transformed_rows[i:i + batch_size]
             hook.insert_rows(
@@ -117,7 +135,7 @@ def bench_transfer_traditional(**context):
 
 def bench_transfer_adbc(**context):
     """Transfer data using ADBC (Arrow-native extract + transform + load)."""
-    row_count = int(Variable.get("BENCH_TRANSFER_ROWS", default_var=50000))
+    row_count = get_bench_row_count()
     
     print(f"📊 ADBC Transfer: {row_count:,} rows")
     
@@ -132,10 +150,12 @@ def bench_transfer_adbc(**context):
                 
                 print(f"  Extracted {len(arrow_table):,} rows as Arrow table")
                 
-                # Transform using Arrow compute (apply 10% discount)
-                discounted_prices = pc.multiply(arrow_table['price'], 0.9)
+                # NUMERIC arrives as opaque string; float64 then decimal128 for COPY.
+                discounted_prices = pc.round(
+                    pc.multiply(arrow_numeric_to_float64(arrow_table["price"]), 0.9),
+                    2,
+                ).cast(pa.decimal128(10, 2))
                 
-                # Create new table with transformed data
                 transformed_table = pa.table({
                     'product_name': arrow_table['product_name'],
                     'category': arrow_table['category'],
@@ -146,12 +166,12 @@ def bench_transfer_adbc(**context):
                 
                 print(f"  Transformed {len(transformed_table):,} rows using Arrow compute")
                 
-                # Load using ADBC
                 cursor.adbc_ingest(
                     table_name='bench_dest_adbc',
                     data=transformed_table,
                     mode='append'
                 )
+            conn.commit()
     
     duration = timer.get_duration()
     rows_per_sec = row_count / duration if duration > 0 else 0
@@ -182,10 +202,26 @@ def save_results(**context):
         metadata={
             "method": "extract_transform_load",
             "transformation": "apply_10_percent_discount",
-            "database": "PostgreSQL 15"
+            "database": "PostgreSQL 15",
         }
     )
-    
+    try:
+        arrow_op = read_operator_duration("transfer_arrow_operator")
+        write_benchmark_json(
+            "bench_transfer_arrow_operator",
+            {
+                "row_count": traditional_rows,
+                "hook_etl_traditional": duration_entry(traditional_duration, traditional_rows),
+                "hook_etl_adbc": duration_entry(adbc_duration, adbc_rows),
+                "adbc_arrow_transfer": duration_entry(arrow_op, traditional_rows),
+                "metadata": {
+                    "hook_etl": "PythonOperator + 10% price discount",
+                    "adbc_arrow_transfer": "AdbcArrowTransfer, no transform, dest adbc_ingest",
+                },
+            },
+        )
+    except RuntimeError as exc:
+        print(f"AdbcArrowTransfer duration not recorded: {exc}")
     return results
 
 
@@ -201,8 +237,8 @@ default_args = {
 with DAG(
     'bench_transfer',
     default_args=default_args,
-    description='Benchmark: Data Transfer (ETL) - Traditional vs ADBC',
-    schedule_interval=None,
+    description='Benchmark: Data Transfer (ETL) plus AdbcArrowTransfer operator',
+    schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=['benchmark', 'adbc', 'transfer', 'etl'],
@@ -222,10 +258,33 @@ with DAG(
         task_id='transfer_adbc',
         python_callable=bench_transfer_adbc,
     )
+
+    row_limit = int(os.environ.get("BENCH_ROW_COUNT", DEFAULT_ROW_COUNT))
+    arrow_op = AdbcArrowTransfer(
+        task_id="transfer_arrow_operator",
+        source_conn_id="postgres_adbc",
+        destination_conn_id="postgres_adbc",
+        destination_table="bench_dest_arrow",
+        sql=(
+            "SELECT product_name, category, price, quantity, created_at "
+            f"FROM bench_source LIMIT {row_limit}"
+        ),
+        preoperator="TRUNCATE TABLE bench_dest_arrow",
+        insert_args={
+            "target_fields": [
+                "product_name",
+                "category",
+                "price",
+                "quantity",
+                "created_at",
+            ]
+        },
+        on_success_callback=record_operator_duration,
+    )
     
     save = PythonOperator(
         task_id='save_results',
         python_callable=save_results,
     )
     
-    populate >> [traditional, adbc] >> save
+    populate >> [traditional, adbc, arrow_op] >> save

@@ -52,6 +52,15 @@ CREATE TABLE IF NOT EXISTS bench_dest_adbc (
     created_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS bench_dest_arrow (
+    id SERIAL PRIMARY KEY,
+    product_name VARCHAR(100),
+    category VARCHAR(50),
+    price NUMERIC(10, 2),
+    quantity INTEGER,
+    created_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS bench_op_sql_traditional (
     id SERIAL PRIMARY KEY,
     product_name VARCHAR(100),
@@ -80,6 +89,25 @@ CREATE TABLE IF NOT EXISTS bench_op_xfer_traditional (
 );
 
 CREATE TABLE IF NOT EXISTS bench_op_xfer_adbc (
+    id SERIAL PRIMARY KEY,
+    product_name VARCHAR(100),
+    category VARCHAR(50),
+    price NUMERIC(10, 2),
+    quantity INTEGER,
+    created_at TIMESTAMP
+);
+
+-- AdbcArrowTransfer dest (NUMERIC kept; ingest uses decimal128, not insert_rows)
+CREATE TABLE IF NOT EXISTS bench_op_xfer_arrow_from_pg (
+    id SERIAL PRIMARY KEY,
+    product_name VARCHAR(100),
+    category VARCHAR(50),
+    price NUMERIC(10, 2),
+    quantity INTEGER,
+    created_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS bench_op_xfer_arrow_from_adbc (
     id SERIAL PRIMARY KEY,
     product_name VARCHAR(100),
     category VARCHAR(50),

@@ -1,10 +1,17 @@
 """Shared utilities for benchmark DAGs."""
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Dict, Any
 from datetime import datetime
+
+# Single volume knob for every DAG (insert, select, transfer, operators, DuckDB, SQLite).
+# 1_000_000 is 10x the original insert/select default (100k) and 20x the original
+# transfer/operator default (50k). Override with Airflow Variable or env BENCH_ROW_COUNT.
+DEFAULT_ROW_COUNT = 1_000_000
+DEFAULT_BATCH_SIZE = 1_000
 
 
 class BenchmarkTimer:
@@ -64,7 +71,10 @@ def save_benchmark_results(
             "rows_per_second": round(adbc_rows / adbc_time, 2) if adbc_time > 0 else 0
         },
         "speedup": round(traditional_time / adbc_time, 2) if adbc_time > 0 else 0,
-        "metadata": metadata or {}
+        "metadata": {
+            **(metadata or {}),
+            "row_count": traditional_rows,
+        },
     }
     
     # Save to file
@@ -79,6 +89,153 @@ def save_benchmark_results(
     print(json.dumps(results, indent=2))
     
     return results
+
+
+def write_benchmark_json(benchmark_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Write an arbitrary results payload (for multi-path operator comparisons)."""
+    results_dir = Path("/opt/airflow/include/results")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    body = {
+        "benchmark": benchmark_name,
+        "timestamp": datetime.now().isoformat(),
+        **payload,
+    }
+    output_file = results_dir / f"{benchmark_name}.json"
+    with open(output_file, "w") as f:
+        json.dump(body, f, indent=2)
+    print(f"✅ Results saved to {output_file}")
+    print(json.dumps(body, indent=2))
+    return body
+
+
+def duration_entry(duration_seconds: float, rows: int) -> Dict[str, Any]:
+    return {
+        "duration_seconds": round(duration_seconds, 3),
+        "rows_processed": rows,
+        "rows_per_second": round(rows / duration_seconds, 2) if duration_seconds > 0 else 0,
+    }
+
+
+def _airflow_variable_get(key: str, default: str) -> str:
+    """Read an Airflow Variable without hitting the metadata DB from task code.
+
+    Airflow 3 tasks must use the Task SDK (`airflow.sdk.Variable`). Fall back to
+    the Airflow 2 `airflow.models.Variable` API, then to the supplied default.
+    """
+    try:
+        from airflow.sdk import Variable
+
+        return str(Variable.get(key, default=default))
+    except Exception:
+        try:
+            from airflow.models import Variable as LegacyVariable
+
+            return str(LegacyVariable.get(key, default_var=default))
+        except Exception:
+            return default
+
+
+def get_bench_row_count() -> int:
+    """Row count for all benchmark DAGs.
+
+    Resolution: Airflow Variable BENCH_ROW_COUNT, else env BENCH_ROW_COUNT,
+    else DEFAULT_ROW_COUNT. Transfer and operator DAGs use this same value.
+    """
+    env_default = os.environ.get("BENCH_ROW_COUNT", str(DEFAULT_ROW_COUNT))
+    return int(_airflow_variable_get("BENCH_ROW_COUNT", env_default))
+
+
+def get_bench_batch_size() -> int:
+    """Traditional Postgres insert batch size (BENCH_BATCH_SIZE)."""
+    env_default = os.environ.get("BENCH_BATCH_SIZE", str(DEFAULT_BATCH_SIZE))
+    return int(_airflow_variable_get("BENCH_BATCH_SIZE", env_default))
+
+
+def record_operator_duration(context) -> None:
+    """Persist TaskInstance duration without ORM access (Airflow 3 Task SDK)."""
+    ti = context.get("ti") or context.get("task_instance")
+    duration = getattr(ti, "duration", None)
+    if duration is None:
+        start = getattr(ti, "start_date", None)
+        end = getattr(ti, "end_date", None)
+        if start and end:
+            duration = (end - start).total_seconds()
+    task_id = getattr(ti, "task_id", None) or "unknown"
+    if duration is None:
+        raise RuntimeError(f"No duration recorded for task {task_id}")
+    results_dir = Path("/opt/airflow/include/results")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"task_id": task_id, "duration": float(duration)}
+    (results_dir / f"_ti_duration_{task_id}.json").write_text(json.dumps(payload))
+
+
+def read_operator_duration(task_id: str) -> float:
+    """Read a duration previously stored by record_operator_duration."""
+    path = Path("/opt/airflow/include/results") / f"_ti_duration_{task_id}.json"
+    if not path.exists():
+        raise RuntimeError(f"No duration recorded for task {task_id}")
+    return float(json.loads(path.read_text())["duration"])
+
+
+def sample_rows_to_arrow(data, *, created_at_as_string: bool = False):
+    """Arrow table for (name, value, created_at, data). value is int32 for PG INTEGER."""
+    import pyarrow as pa
+
+    ts_type = pa.string() if created_at_as_string else pa.timestamp("us")
+    timestamps = [row[2].isoformat() if created_at_as_string else row[2] for row in data]
+    return pa.table(
+        {
+            "name": pa.array([row[0] for row in data], type=pa.string()),
+            "value": pa.array([row[1] for row in data], type=pa.int32()),
+            "created_at": pa.array(timestamps, type=ts_type),
+            "data": pa.array([row[3] for row in data], type=pa.string()),
+        }
+    )
+
+
+def product_rows_to_arrow(num_rows: int):
+    """Arrow table matching bench_source (quantity int32, price decimal128(10,2)).
+
+    ADBC PostgreSQL COPY cannot write Arrow float64 into NUMERIC.
+    """
+    import random
+    from datetime import datetime
+    from decimal import Decimal
+
+    import pyarrow as pa
+
+    categories = ["Electronics", "Clothing", "Food", "Books", "Toys"]
+    now = datetime.now()
+    price_type = pa.decimal128(10, 2)
+    prices = [
+        Decimal(f"{round(random.uniform(10.0, 1000.0), 2):.2f}") for _ in range(num_rows)
+    ]
+    return pa.table(
+        {
+            "product_name": pa.array(
+                [f"Product_{i}" for i in range(num_rows)], type=pa.string()
+            ),
+            "category": pa.array(
+                [random.choice(categories) for _ in range(num_rows)], type=pa.string()
+            ),
+            "price": pa.array(prices, type=price_type),
+            "quantity": pa.array(
+                [random.randint(1, 100) for _ in range(num_rows)], type=pa.int32()
+            ),
+            "created_at": pa.array([now] * num_rows, type=pa.timestamp("us")),
+        }
+    )
+
+
+def arrow_numeric_to_float64(column):
+    """Cast a Postgres NUMERIC Arrow column (often opaque string) to float64."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    chunked = column if isinstance(column, pa.ChunkedArray) else pa.chunked_array([column])
+    combined = chunked.combine_chunks()
+    storage = combined.storage if hasattr(combined, "storage") else combined
+    return pc.cast(storage, pa.float64())
 
 
 def generate_product_data(num_rows: int) -> list:

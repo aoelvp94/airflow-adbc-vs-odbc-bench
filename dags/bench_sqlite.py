@@ -8,11 +8,9 @@ with a DBAPI fallback.
 
 from datetime import datetime
 
-from airflow import DAG
-from airflow.models import Variable
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import DAG
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
-import pyarrow as pa
 import os
 import sqlite3
 import sys
@@ -21,6 +19,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "include"))
 from utils.benchmark_utils import (
     BenchmarkTimer,
     generate_sample_data,
+    get_bench_row_count,
+    sample_rows_to_arrow,
     save_benchmark_results,
 )
 from utils.local_engines import sqlite_path
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS bench_insert (
 
 
 def _row_count() -> int:
-    return int(Variable.get("BENCH_ROW_COUNT", default_var=100000))
+    return get_bench_row_count()
 
 
 def _open_adbc():
@@ -84,14 +84,7 @@ def bench_insert_traditional(**context):
 def bench_insert_adbc(**context):
     row_count = _row_count()
     data = generate_sample_data(row_count)
-    arrow_table = pa.table(
-        {
-            "name": [row[0] for row in data],
-            "value": [row[1] for row in data],
-            "created_at": [row[2].isoformat() for row in data],
-            "data": [row[3] for row in data],
-        }
-    )
+    arrow_table = sample_rows_to_arrow(data, created_at_as_string=True)
     conn = _open_adbc()
     try:
         with conn.cursor() as cursor:
@@ -188,7 +181,7 @@ with DAG(
     "bench_sqlite",
     default_args=default_args,
     description="Benchmark: file-backed SQLite, sqlite3 vs ADBC",
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=["benchmark", "adbc", "sqlite"],
@@ -204,4 +197,5 @@ with DAG(
     select_adbc = PythonOperator(task_id="select_adbc", python_callable=bench_select_adbc)
     save = PythonOperator(task_id="save_results", python_callable=save_results)
 
-    setup >> insert_traditional >> insert_adbc >> [select_traditional, select_adbc] >> save
+    # One file: serialize writes and selects to avoid lock fights at large N.
+    setup >> insert_traditional >> insert_adbc >> select_traditional >> select_adbc >> save
