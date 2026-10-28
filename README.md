@@ -52,7 +52,7 @@ Goal: stock operator + traditional hook vs stock operator + ADBC hook vs Arrow-a
 | --- | --- | --- |
 | Hook | `bench_bulk_insert`, `bench_bulk_select`, `bench_transfer` | `PostgresHook` vs `AdbcHook` inside Python callables (insert_rows / fetchall vs Arrow ingest / `fetch_arrow_table`; hand-rolled ETL) |
 | Hook (local file) | `bench_duckdb`, `bench_sqlite` | Native Python API vs ADBC on a file in the compose volume |
-| Operator | `bench_sql_operators` | Stock `SQLExecuteQueryOperator`, `SQLInsertRowsOperator`, `SQLBulkLoadOperator`, `GenericTransfer` on postgres / odbc / adbc connections; custom `AdbcArrowTransfer` dest `adbc_ingest`. Timed tasks run **serially** on LocalExecutor. |
+| Operator | `bench_sql_operators` | Stock `SQLExecuteQueryOperator`, `SQLInsertRowsOperator`, `SQLBulkLoadOperator`, `GenericTransfer` on postgres / odbc / adbc connections; custom `AdbcArrowTransfer` dest `adbc_ingest`. Timed tasks run **serially** on LocalExecutor. Untimed `verify_operator_loads` runs after the matrix and is not in `BenchmarkTimer` / `on_success_callback` durations. |
 
 ## Stack
 
@@ -175,6 +175,27 @@ Footnotes only: different code path (callable vs operator), extra transform on t
 - Stock `GenericTransfer` on each protocol pair (`get_records` + dest `insert_rows`)
 - Custom `AdbcArrowTransfer` from traditional source and from ADBC source; dest is always `adbc_ingest` into NUMERIC
 - Durations are Airflow `TaskInstance.duration`, except `SQLInsertRowsOperator` which records `execute()` wall time after row generation
+- After timed tasks, untimed `verify_operator_loads` checks dest tables (see **Post-load verification**)
+
+`bench_transfer` also has untimed `verify_transfer_loads` after the hook ETL / Arrow copy tasks.
+
+### Post-load verification
+
+Task success is not enough: dest tables are queried in PostgreSQL (`COUNT(*)`, an ordered md5 checksum of payload columns, and `EXCEPT` both ways on checksum mismatch). Rows are not loaded into Python. A mismatch **fails the DAG task** (`LoadVerifyError`).
+
+**Verified (must match `BENCH_ROW_COUNT` / `get_bench_row_count()`):**
+
+- Every operator dest in `bench_sql_operators`, plus `bench_source`
+- Copy paths that read the same extract SQL with no transform — `SQLExecuteQueryOperator` (postgres/odbc/adbc), stock `GenericTransfer` postgres, both `AdbcArrowTransfer` dests, `SQLBulkLoadOperator` — payload equals `bench_source` (`product_name`, `category`, `quantity`, `created_at`, `price`)
+- Stock `GenericTransfer` ODBC/ADBC dests store `price` as float8 (`FLOAT8_DEST_TABLES`). They are still compared to `bench_source` with `CAST(price AS numeric(10, 2))` plus the other payload columns
+- `bench_transfer`: `COUNT(*)` on `bench_dest_traditional`, `bench_dest_adbc`, `bench_dest_arrow`; Arrow dest payload equals `bench_source` (copy, no transform)
+
+**Intentionally not equal (COUNT only, documented):**
+
+- `SQLInsertRowsOperator` dests regenerate rows via `generate_product_data` (unseeded `random` + `datetime.now()`), not `bench_source`. COUNT == N only; content is not compared to transfer paths or across postgres/odbc/adbc
+- Hook ETL in `bench_transfer` applies a **10% price discount**. Do not expect equality with `GenericTransfer` / Arrow copy; COUNT == N only vs those paths
+
+**If verify fails:** the DAG run is failed (and `./scripts/run_bench.sh` treats that DAG as failed). Timings are not an apples-to-apples claim until dest rows match. The verify task log names the table, `COUNT(*)` vs expected N, checksum fields, and `EXCEPT` row counts in each direction (truncated load, `LIMIT` vs Variable mismatch, type coercion, …). Verification time is **not** folded into operator durations.
 
 ### Hook-level (local files)
 
@@ -278,8 +299,8 @@ hook = AdbcHook(adbc_conn_id='postgres_adbc')
 │   ├── data/                      # DuckDB / SQLite files
 │   ├── operators/                 # AdbcArrowTransfer (GenericTransfer + adbc_ingest)
 │   ├── results/                   # JSON outputs
-│   └── utils/
-├── tests/                         # pytest: adbc_ingest mock (no Postgres)
+│   └── utils/                     # timers, generators, post-load verify_load
+├── tests/                         # pytest: operators + verify helpers (no Postgres)
 ├── scripts/
 │   ├── run_bench.sh
 │   ├── setup_connections.sh

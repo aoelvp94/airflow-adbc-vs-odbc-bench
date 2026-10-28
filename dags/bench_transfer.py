@@ -33,6 +33,7 @@ from utils.benchmark_utils import (
     save_benchmark_results,
     write_benchmark_json,
 )
+from utils.verify_load import assert_payload_equal, verify_counts
 
 
 def populate_source_data(**context):
@@ -184,6 +185,28 @@ def bench_transfer_adbc(**context):
     return duration
 
 
+def verify_transfer_loads(**context):
+    """COUNT dest rows; Arrow copy vs source. Hook ETL is COUNT-only. Not timed."""
+    expected = get_bench_row_count()
+    hook = PostgresHook(postgres_conn_id="postgres_traditional")
+    verify_counts(
+        hook,
+        (
+            "bench_source",
+            "bench_dest_traditional",
+            "bench_dest_adbc",
+            "bench_dest_arrow",
+        ),
+        expected,
+    )
+    assert_payload_equal(hook, "bench_source", "bench_dest_arrow")
+    print(
+        "hook ETL dests bench_dest_traditional / bench_dest_adbc: COUNT only. "
+        "Both apply a 10% price discount by design; content is not compared to "
+        "bench_source, bench_dest_arrow, or GenericTransfer in bench_sql_operators."
+    )
+
+
 def save_results(**context):
     """Save benchmark results to file."""
     ti = context['task_instance']
@@ -282,9 +305,13 @@ with DAG(
         on_success_callback=record_operator_duration,
     )
     
+    verify = PythonOperator(
+        task_id='verify_transfer_loads',
+        python_callable=verify_transfer_loads,
+    )
     save = PythonOperator(
         task_id='save_results',
         python_callable=save_results,
     )
     
-    populate >> [traditional, adbc, arrow_op] >> save
+    populate >> [traditional, adbc, arrow_op] >> verify >> save
