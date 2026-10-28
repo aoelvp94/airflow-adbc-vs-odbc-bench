@@ -12,7 +12,6 @@ from datetime import datetime
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
-import pyarrow as pa
 import os
 import sys
 
@@ -203,5 +202,5 @@ with DAG(
     select_adbc = PythonOperator(task_id="select_adbc", python_callable=bench_select_adbc)
     save = PythonOperator(task_id="save_results", python_callable=save_results)
 
-    # One file: serialize writes, then select.
-    setup >> insert_traditional >> insert_adbc >> [select_traditional, select_adbc] >> save
+    # One file: serialize writes and selects (DuckDB holds an exclusive lock).
+    setup >> insert_traditional >> insert_adbc >> select_traditional >> select_adbc >> save

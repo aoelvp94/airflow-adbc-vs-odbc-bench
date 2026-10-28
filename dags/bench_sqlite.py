@@ -11,7 +11,6 @@ from datetime import datetime
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
-import pyarrow as pa
 import os
 import sqlite3
 import sys
@@ -198,4 +197,5 @@ with DAG(
     select_adbc = PythonOperator(task_id="select_adbc", python_callable=bench_select_adbc)
     save = PythonOperator(task_id="save_results", python_callable=save_results)
 
-    setup >> insert_traditional >> insert_adbc >> [select_traditional, select_adbc] >> save
+    # One file: serialize writes and selects to avoid lock fights at large N.
+    setup >> insert_traditional >> insert_adbc >> select_traditional >> select_adbc >> save
