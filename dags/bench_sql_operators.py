@@ -18,6 +18,9 @@ Not measured (exist but are not SQL/transfer workloads):
 - AnalyticsOperator (DataFusion over files/object storage, not Postgres↔Postgres)
 - @task.sql (decorator over SQLExecuteQueryOperator; same execute path)
 - PostgresToPostgresOperator / PostgresOperator: not in postgres provider 7.0.2
+
+Post-load (not timed): verify_operator_loads checks COUNT(*) == N and copy-path
+payload vs bench_source. SQLInsertRowsOperator dests are COUNT-only.
 """
 
 from datetime import datetime
@@ -56,6 +59,7 @@ from utils.benchmark_utils import (
     write_benchmark_json,
     write_task_duration,
 )
+from utils.verify_load import verify_copy_vs_source, verify_counts
 
 BULK_TSV = "/opt/airflow/include/data/bench_source.tsv"
 
@@ -85,6 +89,17 @@ FLOAT8_DEST_TABLES = frozenset(
         "bench_op_insert_odbc",
     }
 )
+
+# SQLInsertRowsOperator calls generate_product_data (unseeded random + datetime.now()),
+# not bench_source. Post-load: COUNT only. Copy paths below are compared to source.
+INSERT_ROWS_TABLES = (
+    "bench_op_insert_traditional",
+    "bench_op_insert_odbc",
+    "bench_op_insert_adbc",
+)
+COPY_FROM_SOURCE_TABLES = tuple(
+    t for t in OP_TABLES if t not in INSERT_ROWS_TABLES
+) + BULK_TABLES
 
 INSERT_COLUMNS = [
     "product_name",
@@ -178,6 +193,30 @@ def run_sql_insert_rows(conn_id: str, table: str, duration_task_id: str, **conte
     write_task_duration(duration_task_id, duration)
     print(f"SQLInsertRowsOperator {conn_id} -> {table}: {duration:.3f}s")
     return duration
+
+
+def verify_operator_loads(**context):
+    """COUNT dest rows; copy-path payload must match bench_source. Not timed."""
+    expected = _row_count()
+    hook = PostgresHook(postgres_conn_id="postgres_traditional")
+    verify_copy_vs_source(
+        hook,
+        "bench_source",
+        COPY_FROM_SOURCE_TABLES,
+        expected,
+        include_price=True,
+    )
+    verify_counts(hook, INSERT_ROWS_TABLES, expected)
+    print(
+        "SQLInsertRowsOperator dests: COUNT only. generate_product_data is "
+        "unseeded (random + datetime.now()) so content is not compared to "
+        "bench_source or across postgres/odbc/adbc."
+    )
+    print(
+        "FLOAT8 dests "
+        f"{sorted(FLOAT8_DEST_TABLES & set(COPY_FROM_SOURCE_TABLES))}: "
+        "price compared as CAST(price AS numeric(10, 2)) vs bench_source."
+    )
 
 
 def save_operator_results(**context):
@@ -473,12 +512,18 @@ with DAG(
         on_success_callback=record_operator_duration,
     )
 
+    verify = PythonOperator(
+        task_id="verify_operator_loads",
+        python_callable=verify_operator_loads,
+    )
     save = PythonOperator(
         task_id="save_results",
         python_callable=save_operator_results,
     )
 
     # Serialize timed tasks so LocalExecutor does not overlap 1e6-row jobs.
+    # verify_operator_loads is after timed work and has no BenchmarkTimer /
+    # on_success_callback, so it is not folded into operator durations.
     timed = [
         sql_traditional,
         sql_odbc,
@@ -496,4 +541,4 @@ with DAG(
     setup >> timed[0]
     for left, right in zip(timed, timed[1:]):
         left >> right
-    timed[-1] >> save
+    timed[-1] >> verify >> save
