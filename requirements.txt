@@ -7,11 +7,10 @@ apache-airflow-providers-odbc==4.13.0
 apache-airflow-providers-common-sql==2.1.1
 apache-airflow-providers-standard==1.19.0
 
-# ADBC Drivers (not in constraints-3.3.2; arrow provider requires adbc-driver-manager>=1.7.0).
-# Keep the manager + engine drivers on the same current stable line (1.13.x).
-adbc-driver-manager==1.13.0
-adbc-driver-postgresql==1.13.0
-adbc-driver-sqlite==1.13.0
+# ADBC Drivers (constraints-3.3.2; arrow provider requires adbc-driver-manager>=1.7.0)
+adbc-driver-manager==1.12.0
+adbc-driver-postgresql==1.12.0
+adbc-driver-sqlite==1.12.0
 
 # Local engines (DuckDB 2.0.0 LTS wheel also exports adbc_driver_duckdb; not in AF constraints)
 duckdb==2.0.0

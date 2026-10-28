@@ -30,7 +30,7 @@ Snowflake, BigQuery, and Databricks are out of scope. This repo does not require
 - PostgreSQL 18 (compose `postgres:18`; 18.6 at time of writing — not 19 RC)
 - File-backed DuckDB 2.0.0 LTS and SQLite under `include/data/` (no extra service)
 - Providers: `apache-airflow-providers-postgres` 7.0.2, `apache-airflow-providers-apache-arrow` 0.1.1, `apache-airflow-providers-common-sql` 2.1.1, `apache-airflow-providers-standard` 1.19.0
-- Drivers: `psycopg2-binary`, `adbc-driver-manager` / `adbc-driver-postgresql` / `adbc-driver-sqlite` 1.13.0, `duckdb==2.0.0` (exports `adbc_driver_duckdb`)
+- Drivers: `psycopg2-binary`, `adbc-driver-manager` / `adbc-driver-postgresql` / `adbc-driver-sqlite` 1.12.0 (constraints-3.3.2), `duckdb==2.0.0` (exports `adbc_driver_duckdb`; not in AF constraints)
 - Docker Compose
 
 ## Quick Start
@@ -174,7 +174,7 @@ Tested stack (personal demo; not a guarantee for every 3.x patch):
 [x] constraints-3.3.2 / constraints-3.12.txt
 [x] PostgreSQL 18 (compose postgres:18; 18.6 at time of writing — not 19 RC)
 [x] duckdb == 2.0.0 (exports adbc_driver_duckdb; not in AF constraints)
-[x] adbc-driver-manager / adbc-driver-postgresql / adbc-driver-sqlite == 1.13.0
+[x] adbc-driver-manager / adbc-driver-postgresql / adbc-driver-sqlite == 1.12.0 (constraints-3.3.2)
 [x] AdbcHook.get_conn() + cursor.adbc_ingest / fetch_arrow_table
 [x] PostgresHook.insert_rows / get_records / run
 ```
