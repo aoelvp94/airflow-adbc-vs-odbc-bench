@@ -111,6 +111,51 @@ def get_bench_batch_size() -> int:
     return int(Variable.get("BENCH_BATCH_SIZE", default_var=env_default))
 
 
+def sample_rows_to_arrow(data, *, created_at_as_string: bool = False):
+    """Arrow table for (name, value, created_at, data). value is int32 for PG INTEGER."""
+    import pyarrow as pa
+
+    ts_type = pa.string() if created_at_as_string else pa.timestamp("us")
+    timestamps = [row[2].isoformat() if created_at_as_string else row[2] for row in data]
+    return pa.table(
+        {
+            "name": pa.array([row[0] for row in data], type=pa.string()),
+            "value": pa.array([row[1] for row in data], type=pa.int32()),
+            "created_at": pa.array(timestamps, type=ts_type),
+            "data": pa.array([row[3] for row in data], type=pa.string()),
+        }
+    )
+
+
+def product_rows_to_arrow(num_rows: int):
+    """Arrow table matching bench_source (quantity int32, price float64, timestamp us)."""
+    import random
+    from datetime import datetime
+
+    import pyarrow as pa
+
+    categories = ["Electronics", "Clothing", "Food", "Books", "Toys"]
+    now = datetime.now()
+    return pa.table(
+        {
+            "product_name": pa.array(
+                [f"Product_{i}" for i in range(num_rows)], type=pa.string()
+            ),
+            "category": pa.array(
+                [random.choice(categories) for _ in range(num_rows)], type=pa.string()
+            ),
+            "price": pa.array(
+                [round(random.uniform(10.0, 1000.0), 2) for _ in range(num_rows)],
+                type=pa.float64(),
+            ),
+            "quantity": pa.array(
+                [random.randint(1, 100) for _ in range(num_rows)], type=pa.int32()
+            ),
+            "created_at": pa.array([now] * num_rows, type=pa.timestamp("us")),
+        }
+    )
+
+
 def generate_product_data(num_rows: int) -> list:
     """Generate (product_name, category, price, quantity, created_at) rows."""
     import random

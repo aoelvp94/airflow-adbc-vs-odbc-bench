@@ -19,6 +19,7 @@ from utils.benchmark_utils import (
     BenchmarkTimer,
     get_bench_batch_size,
     get_bench_row_count,
+    product_rows_to_arrow,
     save_benchmark_results,
 )
 
@@ -36,20 +37,8 @@ def populate_source_data(**context):
     hook.run("TRUNCATE TABLE bench_dest_traditional;")
     hook.run("TRUNCATE TABLE bench_dest_adbc;")
     
-    # Use ADBC for fast population
-    import random
-    
     adbc_hook = AdbcHook(adbc_conn_id='postgres_adbc')
-    
-    data = {
-        'product_name': [f'Product_{i}' for i in range(row_count)],
-        'category': [random.choice(['Electronics', 'Clothing', 'Food', 'Books', 'Toys']) for _ in range(row_count)],
-        'price': [round(random.uniform(10.0, 1000.0), 2) for _ in range(row_count)],
-        'quantity': [random.randint(1, 100) for _ in range(row_count)],
-        'created_at': [datetime.now() for _ in range(row_count)]
-    }
-    
-    arrow_table = pa.table(data)
+    arrow_table = product_rows_to_arrow(row_count)
     
     with adbc_hook.get_conn() as conn:
         with conn.cursor() as cursor:
@@ -58,6 +47,7 @@ def populate_source_data(**context):
                 data=arrow_table,
                 mode='append'
             )
+        conn.commit()
     
     print(f"✅ Source data ready: {row_count:,} rows")
 
@@ -150,12 +140,12 @@ def bench_transfer_adbc(**context):
                 
                 print(f"  Transformed {len(transformed_table):,} rows using Arrow compute")
                 
-                # Load using ADBC
                 cursor.adbc_ingest(
                     table_name='bench_dest_adbc',
                     data=transformed_table,
                     mode='append'
                 )
+            conn.commit()
     
     duration = timer.get_duration()
     rows_per_sec = row_count / duration if duration > 0 else 0

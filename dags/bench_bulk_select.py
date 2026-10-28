@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'include'))
 from utils.benchmark_utils import (
     BenchmarkTimer,
     get_bench_row_count,
+    product_rows_to_arrow,
     save_benchmark_results,
 )
 
@@ -31,22 +32,9 @@ def populate_test_data(**context):
     # Truncate and populate
     hook.run("TRUNCATE TABLE bench_source;")
     
-    # Use ADBC for fast population (not part of benchmark)
     from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
-    import pyarrow as pa
-    import random
-    
-    # Generate data
-    data = {
-        'product_name': [f'Product_{i}' for i in range(row_count)],
-        'category': [random.choice(['Electronics', 'Clothing', 'Food', 'Books', 'Toys']) for _ in range(row_count)],
-        'price': [round(random.uniform(10.0, 1000.0), 2) for _ in range(row_count)],
-        'quantity': [random.randint(1, 100) for _ in range(row_count)],
-        'created_at': [datetime.now() for _ in range(row_count)]
-    }
-    
-    arrow_table = pa.table(data)
-    
+
+    arrow_table = product_rows_to_arrow(row_count)
     adbc_hook = AdbcHook(adbc_conn_id='postgres_adbc')
     with adbc_hook.get_conn() as conn:
         with conn.cursor() as cursor:
@@ -55,6 +43,7 @@ def populate_test_data(**context):
                 data=arrow_table,
                 mode='append'
             )
+        conn.commit()
     
     print(f"✅ Test data ready: {row_count:,} rows")
 

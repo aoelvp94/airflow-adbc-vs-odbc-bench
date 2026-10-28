@@ -20,6 +20,7 @@ from utils.benchmark_utils import (
     generate_sample_data,
     get_bench_batch_size,
     get_bench_row_count,
+    sample_rows_to_arrow,
     save_benchmark_results,
 )
 
@@ -81,29 +82,14 @@ def bench_insert_adbc(**context):
     
     print(f"📊 ADBC Insert: {row_count:,} rows (Arrow batches)")
     
-    # Generate data
     data = generate_sample_data(row_count)
+    arrow_table = sample_rows_to_arrow(data)
     
-    # Convert to Arrow table
-    names = [row[0] for row in data]
-    values = [row[1] for row in data]
-    timestamps = [row[2] for row in data]
-    texts = [row[3] for row in data]
+    print(f"  Arrow table created: {len(arrow_table):,} rows ({arrow_table.schema})")
     
-    arrow_table = pa.table({
-        'name': names,
-        'value': values,
-        'created_at': timestamps,
-        'data': texts
-    })
-    
-    print(f"  Arrow table created: {len(arrow_table):,} rows")
-    
-    # Use ADBC hook
     hook = AdbcHook(adbc_conn_id='postgres_adbc')
     
     with BenchmarkTimer() as timer:
-        # Insert using ADBC (direct Arrow transfer)
         with hook.get_conn() as conn:
             with conn.cursor() as cursor:
                 cursor.adbc_ingest(
@@ -111,6 +97,7 @@ def bench_insert_adbc(**context):
                     data=arrow_table,
                     mode='append'
                 )
+            conn.commit()
     
     duration = timer.get_duration()
     rows_per_sec = row_count / duration if duration > 0 else 0

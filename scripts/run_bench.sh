@@ -55,7 +55,14 @@ trigger_and_wait() {
     
     elapsed=0
     while [ $elapsed -lt "$MAX_WAIT" ]; do
-        state=$(airflow_cli dags state "$dag_id" "$run_id" 2>/dev/null | tail -1 | tr -d '[:space:]' || echo "running")
+        # Airflow 2.11 `dags state` takes execution_date, not run_id.
+        state=$(
+            airflow_cli dags list-runs -d "$dag_id" -o json 2>/dev/null \
+                | grep -E '^[\[{]' \
+                | jq -r --arg id "$run_id" '.[] | select(.run_id == $id) | .state' \
+                | head -1
+        )
+        state=${state:-running}
         
         if [ "$state" = "success" ]; then
             echo "   Completed successfully"

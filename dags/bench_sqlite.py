@@ -21,6 +21,7 @@ from utils.benchmark_utils import (
     BenchmarkTimer,
     generate_sample_data,
     get_bench_row_count,
+    sample_rows_to_arrow,
     save_benchmark_results,
 )
 from utils.local_engines import sqlite_path
@@ -84,14 +85,7 @@ def bench_insert_traditional(**context):
 def bench_insert_adbc(**context):
     row_count = _row_count()
     data = generate_sample_data(row_count)
-    arrow_table = pa.table(
-        {
-            "name": [row[0] for row in data],
-            "value": [row[1] for row in data],
-            "created_at": [row[2].isoformat() for row in data],
-            "data": [row[3] for row in data],
-        }
-    )
+    arrow_table = sample_rows_to_arrow(data, created_at_as_string=True)
     conn = _open_adbc()
     try:
         with conn.cursor() as cursor:

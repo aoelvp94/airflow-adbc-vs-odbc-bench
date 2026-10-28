@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "include"))
 from utils.benchmark_utils import (
     DEFAULT_ROW_COUNT,
     get_bench_row_count,
+    product_rows_to_arrow,
     save_benchmark_results,
 )
 
@@ -44,9 +45,6 @@ def _row_count() -> int:
 
 def setup_operator_tables(**context):
     """Create dest tables and load bench_source. Not timed."""
-    import pyarrow as pa
-    import random
-
     row_count = _row_count()
     hook = PostgresHook(postgres_conn_id="postgres_traditional")
     hook.run("TRUNCATE TABLE bench_source;")
@@ -66,17 +64,7 @@ def setup_operator_tables(**context):
         hook.run(f"TRUNCATE TABLE {table};")
 
     # Arrow ingest for setup only; timed paths are the operators below.
-    now = datetime.now()
-    categories = ["Electronics", "Clothing", "Food", "Books", "Toys"]
-    arrow_table = pa.table(
-        {
-            "product_name": [f"Product_{i}" for i in range(row_count)],
-            "category": [random.choice(categories) for _ in range(row_count)],
-            "price": [round(random.uniform(10.0, 1000.0), 2) for _ in range(row_count)],
-            "quantity": [random.randint(1, 100) for _ in range(row_count)],
-            "created_at": [now for _ in range(row_count)],
-        }
-    )
+    arrow_table = product_rows_to_arrow(row_count)
     adbc_hook = AdbcHook(adbc_conn_id="postgres_adbc")
     with adbc_hook.get_conn() as conn:
         with conn.cursor() as cursor:
@@ -85,6 +73,7 @@ def setup_operator_tables(**context):
                 data=arrow_table,
                 mode="append",
             )
+        conn.commit()
     print(f"Operator bench source ready: {row_count} rows")
 
 
