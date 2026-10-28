@@ -59,16 +59,28 @@ echo "Unpausing DAGs..."
 docker exec $CONTAINER_ID airflow dags unpause bench_bulk_insert
 docker exec $CONTAINER_ID airflow dags unpause bench_bulk_select
 docker exec $CONTAINER_ID airflow dags unpause bench_transfer
+docker exec $CONTAINER_ID airflow dags unpause bench_sql_operators
+docker exec $CONTAINER_ID airflow dags unpause bench_duckdb
+docker exec $CONTAINER_ID airflow dags unpause bench_sqlite
 echo ""
 
 # Run benchmarks
-trigger_and_wait "bench_bulk_insert" "Bulk Insert Benchmark"
+trigger_and_wait "bench_bulk_insert" "Bulk Insert Benchmark (hook, Postgres)"
 echo ""
 
-trigger_and_wait "bench_bulk_select" "Bulk Select Benchmark"
+trigger_and_wait "bench_bulk_select" "Bulk Select Benchmark (hook, Postgres)"
 echo ""
 
-trigger_and_wait "bench_transfer" "Transfer Benchmark"
+trigger_and_wait "bench_transfer" "Transfer Benchmark (hook ETL, Postgres)"
+echo ""
+
+trigger_and_wait "bench_sql_operators" "SQL operators (SQLExecuteQueryOperator + GenericTransfer)"
+echo ""
+
+trigger_and_wait "bench_duckdb" "DuckDB file-backed (duckdb API vs ADBC)"
+echo ""
+
+trigger_and_wait "bench_sqlite" "SQLite file-backed (sqlite3 vs ADBC)"
 echo ""
 
 # Display results
@@ -124,6 +136,27 @@ if [ -f "include/results/bench_transfer.json" ]; then
     '
     echo ""
 fi
+
+print_result() {
+    local file=$1
+    local title=$2
+    if [ -f "$file" ]; then
+        echo "--- $title ---"
+        cat "$file" | jq -r '
+            "Traditional: \(.traditional.duration_seconds)s  \(.traditional.rows_per_second) rows/s",
+            "ADBC:        \(.adbc.duration_seconds)s  \(.adbc.rows_per_second) rows/s",
+            "Speedup:     \(.speedup)x"
+        '
+        echo ""
+    fi
+}
+
+print_result "include/results/bench_sql_execute.json" "Operator SQLExecuteQueryOperator (Postgres)"
+print_result "include/results/bench_generic_transfer.json" "Operator GenericTransfer (Postgres)"
+print_result "include/results/bench_duckdb_insert.json" "DuckDB insert (file)"
+print_result "include/results/bench_duckdb_select.json" "DuckDB select (file)"
+print_result "include/results/bench_sqlite_insert.json" "SQLite insert (file)"
+print_result "include/results/bench_sqlite_select.json" "SQLite select (file)"
 
 echo "================================================"
 echo "✅ Benchmark complete!"
