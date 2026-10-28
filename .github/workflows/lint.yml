@@ -36,6 +36,11 @@ jobs:
           flake8 dags/ include/operators/ --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 dags/ include/operators/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
+      - name: Unit test AdbcArrowTransfer vs GenericTransfer
+        run: |
+          pip install pytest
+          PYTHONPATH=include pytest tests/ -q
+
       - name: Validate DAGs (dry-import)
         run: |
           export AIRFLOW_HOME=$(pwd)
