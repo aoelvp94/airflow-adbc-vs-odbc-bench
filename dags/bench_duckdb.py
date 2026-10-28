@@ -52,6 +52,13 @@ def _open_adbc():
         return adbc_driver_duckdb.dbapi.connect(duckdb_path())
 
 
+def _run_sql(con, sql):
+    """DDL/DML via execute(); DuckDB 2.0 leaves an open streaming result until consumed."""
+    con.execute(sql)
+    if hasattr(con, "complete"):
+        con.complete()
+
+
 def setup_duckdb(**context):
     import duckdb
 
@@ -60,10 +67,10 @@ def setup_duckdb(**context):
         os.remove(path)
     con = duckdb.connect(path)
     try:
-        con.execute(CREATE_SQL)
+        _run_sql(con, CREATE_SQL)
+        print(f"DuckDB {duckdb.__version__} file ready: {path}")
     finally:
         con.close()
-    print(f"DuckDB file ready: {path}")
 
 
 def bench_insert_traditional(**context):
@@ -73,7 +80,7 @@ def bench_insert_traditional(**context):
     data = generate_sample_data(row_count)
     con = duckdb.connect(duckdb_path())
     try:
-        con.execute("DELETE FROM bench_insert")
+        _run_sql(con, "DELETE FROM bench_insert")
         with BenchmarkTimer() as timer:
             con.executemany(INSERT_SQL, data)
         duration = timer.get_duration()
@@ -152,6 +159,7 @@ def save_results(**context):
         adbc_rows=row_count,
         metadata={
             "engine": "duckdb",
+            "duckdb_version": __import__("duckdb").__version__,
             "layer": "hook",
             "traditional": "duckdb Python API executemany",
             "adbc": "AdbcHook / adbc_driver_duckdb Arrow ingest",
@@ -166,6 +174,7 @@ def save_results(**context):
         adbc_rows=ti.xcom_pull(task_ids="select_adbc", key="select_adbc_rows"),
         metadata={
             "engine": "duckdb",
+            "duckdb_version": __import__("duckdb").__version__,
             "layer": "hook",
             "traditional": "duckdb Python API fetchall",
             "adbc": "AdbcHook / fetch_arrow_table",

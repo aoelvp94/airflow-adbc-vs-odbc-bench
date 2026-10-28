@@ -8,8 +8,8 @@ Hook-level DAGs call hooks from `PythonOperator`. Operator-level DAG `bench_sql_
 
 | Engine | Traditional path | ADBC path | Offline | Default runner |
 | --- | --- | --- | --- | --- |
-| PostgreSQL 15 (compose) | `PostgresHook`; `SQLExecuteQueryOperator`; `GenericTransfer` | `AdbcHook`; same operators, conn type `adbc` | Yes | Yes |
-| DuckDB (file in `include/data/`) | `duckdb` Python API | `AdbcHook` + bundled `adbc_driver_duckdb` | Yes | Yes |
+| PostgreSQL 18 (compose `postgres:18`) | `PostgresHook`; `SQLExecuteQueryOperator`; `GenericTransfer` | `AdbcHook`; same operators, conn type `adbc` | Yes | Yes |
+| DuckDB 2.0.0 (file in `include/data/`) | `duckdb` Python API | `AdbcHook` + bundled `adbc_driver_duckdb` | Yes | Yes |
 | SQLite (file in `include/data/`) | stdlib `sqlite3` | `AdbcHook` + `adbc_driver_sqlite` | Yes | Yes |
 | MSSQL / Oracle / Teradata | `OdbcHook` | `AdbcHook` only if a driver exists; MSSQL ADBC is experimental as of 2026 | No (ODBC driver or cloud) | No |
 | Snowflake / BigQuery / Databricks | Vendor hooks | Vendor ADBC drivers | No (accounts / heavy deps) | No |
@@ -27,10 +27,10 @@ Snowflake, BigQuery, and Databricks are out of scope. This repo does not require
 ## Stack
 
 - Apache Airflow 3.3.2 (`apache/airflow:3.3.2-python3.12`), LocalExecutor, api-server + dag-processor
-- PostgreSQL 15 (SQL-server baseline)
-- File-backed DuckDB and SQLite under `include/data/` (no extra service)
+- PostgreSQL 18 (compose `postgres:18`; 18.6 at time of writing — not 19 RC)
+- File-backed DuckDB 2.0.0 LTS and SQLite under `include/data/` (no extra service)
 - Providers: `apache-airflow-providers-postgres` 7.0.2, `apache-airflow-providers-apache-arrow` 0.1.1, `apache-airflow-providers-common-sql` 2.1.1, `apache-airflow-providers-standard` 1.19.0
-- Drivers: `psycopg2-binary`, `adbc-driver-postgresql`, `adbc-driver-sqlite`, `duckdb` (exports `adbc_driver_duckdb`)
+- Drivers: `psycopg2-binary`, `adbc-driver-manager` / `adbc-driver-postgresql` / `adbc-driver-sqlite` 1.13.0, `duckdb==2.0.0` (exports `adbc_driver_duckdb`)
 - Docker Compose
 
 ## Quick Start
@@ -50,7 +50,8 @@ cd airflow-adbc-vs-odbc-bench
 cp .env.example .env
 grep BENCH_ROW_COUNT .env    # must be 1000000 to match the sample table
 
-# Wipe the postgres volume if this tree previously ran Airflow 2
+# Wipe the postgres volume if this tree previously ran Airflow 2 or PostgreSQL 15
+# (PG 15 and 18 data dirs are incompatible). Also removes old DuckDB 1.x files.
 docker compose down -v
 docker compose up -d --build
 ./scripts/wait_for_airflow.sh
@@ -64,7 +65,9 @@ Operator unit tests (no Postgres): `PYTHONPATH=include pytest tests/ -q`.
 
 ## Sample timings (measured)
 
-Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon, 16 GiB RAM, Linux 6.12 x86_64, Airflow 3.3.2 LocalExecutor (`apache/airflow:3.3.2-python3.12`), PostgreSQL 15. **N = `BENCH_ROW_COUNT` = 1,000,000**. Durations are seconds from `include/results/*.json`. Operator rows are Airflow `TaskInstance.duration`. Speedup is traditional / ADBC unless noted.
+Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon, 16 GiB RAM, Linux 6.12 x86_64, Airflow 3.3.2 LocalExecutor (`apache/airflow:3.3.2-python3.12`), PostgreSQL 18 (`postgres:18`), DuckDB 2.0.0. **N = `BENCH_ROW_COUNT` = 1,000,000**. Durations are seconds from `include/results/*.json`. Operator rows are Airflow `TaskInstance.duration`. Speedup is traditional / ADBC unless noted.
+
+Numbers in the tables below are from the previous PostgreSQL 15 / DuckDB 1.5.6 run and will be replaced after a full N=1e6 re-bench on this stack.
 
 ### Stock GenericTransfer vs AdbcArrowTransfer
 
@@ -169,6 +172,9 @@ Tested stack (personal demo; not a guarantee for every 3.x patch):
 [x] apache-airflow-providers-common-sql == 2.1.1   (GenericTransfer, SQLExecuteQueryOperator)
 [x] apache-airflow-providers-standard == 1.19.0    (PythonOperator)
 [x] constraints-3.3.2 / constraints-3.12.txt
+[x] PostgreSQL 18 (compose postgres:18; 18.6 at time of writing — not 19 RC)
+[x] duckdb == 2.0.0 (exports adbc_driver_duckdb; not in AF constraints)
+[x] adbc-driver-manager / adbc-driver-postgresql / adbc-driver-sqlite == 1.13.0
 [x] AdbcHook.get_conn() + cursor.adbc_ingest / fetch_arrow_table
 [x] PostgresHook.insert_rows / get_records / run
 ```

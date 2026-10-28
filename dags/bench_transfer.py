@@ -202,7 +202,7 @@ def save_results(**context):
         metadata={
             "method": "extract_transform_load",
             "transformation": "apply_10_percent_discount",
-            "database": "PostgreSQL 15",
+            "database": "PostgreSQL 18",
         }
     )
     try:

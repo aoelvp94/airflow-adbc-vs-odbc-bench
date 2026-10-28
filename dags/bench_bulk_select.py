@@ -130,7 +130,7 @@ def save_results(**context):
         adbc_rows=adbc_rows,
         metadata={
             "method": "bulk_select",
-            "database": "PostgreSQL 15",
+            "database": "PostgreSQL 18",
             "format_traditional": "list_of_tuples",
             "format_adbc": "arrow_table"
         }
