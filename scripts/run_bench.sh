@@ -59,17 +59,25 @@ trigger_and_wait() {
     
     elapsed=0
     while [ $elapsed -lt "$MAX_WAIT" ]; do
-        # `dags state` historically took execution_date; poll list-runs by run_id.
+        # Airflow 3: `dags state DAG_ID RUN_ID`. AF 2.11 took execution_date and
+        # `list-runs -d`; AF 3 list-runs wants a positional dag_id.
         state=$(
-            airflow_cli dags list-runs -d "$dag_id" -o json 2>/dev/null \
-                | grep -E '^[\[{]' \
-                | jq -r --arg id "$run_id" '
-                    (if type == "array" then . else [. ] end)[]
-                    | select((.run_id // .dag_run_id) == $id)
-                    | .state
-                  ' \
-                | head -1
+            airflow_cli dags state "$dag_id" "$run_id" 2>/dev/null \
+                | grep -E '^(queued|running|success|failed|up_for_retry|up_for_reschedule|restarting)$' \
+                | tail -1
         )
+        if [ -z "$state" ]; then
+            state=$(
+                airflow_cli dags list-runs -o json "$dag_id" 2>/dev/null \
+                    | grep -E '^[\[{]' \
+                    | jq -r --arg id "$run_id" '
+                        (if type == "array" then . else [.] end)[]
+                        | select((.run_id // .dag_run_id) == $id)
+                        | .state
+                      ' \
+                    | head -1
+            )
+        fi
         state=${state:-running}
         
         if [ "$state" = "success" ]; then
