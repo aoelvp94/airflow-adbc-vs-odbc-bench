@@ -35,7 +35,7 @@ def populate_source_data(**context):
     # Use ADBC for fast population
     import random
     
-    adbc_hook = AdbcHook(conn_id='postgres_adbc')
+    adbc_hook = AdbcHook(adbc_conn_id='postgres_adbc')
     
     data = {
         'product_name': [f'Product_{i}' for i in range(row_count)],
@@ -121,7 +121,7 @@ def bench_transfer_adbc(**context):
     
     print(f"📊 ADBC Transfer: {row_count:,} rows")
     
-    hook = AdbcHook(conn_id='postgres_adbc')
+    hook = AdbcHook(adbc_conn_id='postgres_adbc')
     
     with BenchmarkTimer() as timer:
         with hook.get_conn() as conn:

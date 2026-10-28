@@ -81,6 +81,25 @@ def save_benchmark_results(
     return results
 
 
+def generate_product_data(num_rows: int) -> list:
+    """Generate (product_name, category, price, quantity, created_at) rows."""
+    import random
+    from datetime import datetime
+
+    categories = ["Electronics", "Clothing", "Food", "Books", "Toys"]
+    now = datetime.now()
+    return [
+        (
+            f"Product_{i}",
+            random.choice(categories),
+            round(random.uniform(10.0, 1000.0), 2),
+            random.randint(1, 100),
+            now,
+        )
+        for i in range(num_rows)
+    ]
+
+
 def generate_sample_data(num_rows: int) -> list:
     """
     Generate sample data for benchmarks.

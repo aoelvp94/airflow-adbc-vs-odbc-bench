@@ -35,6 +35,12 @@ build/
 include/results/*.json
 include/results/*.csv
 
+# Local engine files
+include/data/*.duckdb
+include/data/*.duckdb.wal
+include/data/*.sqlite
+include/data/*.sqlite-journal
+
 # OS
 .DS_Store
 Thumbs.db

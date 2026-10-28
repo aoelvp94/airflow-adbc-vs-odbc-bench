@@ -1,11 +1,16 @@
 # Airflow Providers
 apache-airflow-providers-postgres==5.13.0
-apache-airflow-providers-apache-arrow==1.3.0
+apache-airflow-providers-apache-arrow==0.1.1
 apache-airflow-providers-odbc==4.9.0
+apache-airflow-providers-common-sql==1.32.0
 
-# ADBC Drivers
-adbc-driver-manager==1.2.0
-adbc-driver-postgresql==1.2.0
+# ADBC Drivers (arrow provider requires adbc-driver-manager>=1.7.0)
+adbc-driver-manager==1.13.0
+adbc-driver-postgresql==1.13.0
+adbc-driver-sqlite==1.13.0
+
+# Local engines (DuckDB wheel also exports adbc_driver_duckdb)
+duckdb==1.5.6
 
 # Data processing
 pyarrow==18.1.0

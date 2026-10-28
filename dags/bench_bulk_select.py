@@ -44,7 +44,7 @@ def populate_test_data(**context):
     
     arrow_table = pa.table(data)
     
-    adbc_hook = AdbcHook(conn_id='postgres_adbc')
+    adbc_hook = AdbcHook(adbc_conn_id='postgres_adbc')
     with adbc_hook.get_conn() as conn:
         with conn.cursor() as cursor:
             cursor.adbc_ingest(
@@ -96,7 +96,7 @@ def bench_select_adbc(**context):
     
     print(f"📊 ADBC SELECT: fetching {row_count:,} rows as Arrow table")
     
-    hook = AdbcHook(conn_id='postgres_adbc')
+    hook = AdbcHook(adbc_conn_id='postgres_adbc')
     
     with BenchmarkTimer() as timer:
         # ADBC Arrow-based fetch

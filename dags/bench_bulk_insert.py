@@ -95,7 +95,7 @@ def bench_insert_adbc(**context):
     print(f"  Arrow table created: {len(arrow_table):,} rows")
     
     # Use ADBC hook
-    hook = AdbcHook(conn_id='postgres_adbc')
+    hook = AdbcHook(adbc_conn_id='postgres_adbc')
     
     with BenchmarkTimer() as timer:
         # Insert using ADBC (direct Arrow transfer)
