@@ -74,17 +74,30 @@ Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon
 
 | Workload | Traditional | ADBC | Speedup |
 | --- | --- | --- | --- |
-| Bulk insert (1,000,000 rows, hook, Postgres) | 17.722 s / 56,427 rows/s (`PostgresHook.insert_rows`) | 1.673 s / 597,659 rows/s (Arrow ingest) | 10.59x |
-| Bulk select (1,000,000 rows, hook, Postgres) | 1.007 s / 993,511 rows/s (`cursor.fetchall`) | 0.423 s / 2,364,413 rows/s (Arrow table) | 2.38x |
-| Transfer (1,000,000 rows extract + load, hook, Postgres) | 18.990 s / 52,658 rows/s (row fetch + `insert_rows`) | 2.088 s / 479,022 rows/s (Arrow compute + ingest) | 9.10x |
-| `SQLExecuteQueryOperator` INSERT...SELECT (1,000,000 rows, Postgres) | 3.582 s / 279,202 rows/s | 3.782 s / 264,430 rows/s | 0.95x |
-| `GenericTransfer` (1,000,000 rows, Postgres) | 15.985 s / 62,560 rows/s (`get_records` + `insert_rows`) | 25.171 s / 39,728 rows/s | 0.64x |
-| DuckDB insert (1,000,000 rows, file) | 564.781 s / 1,771 rows/s (`executemany`) | 0.579 s / 1,726,998 rows/s (Arrow ingest) | 975.38x |
-| DuckDB select (1,000,000 rows, file) | 0.753 s / 1,328,829 rows/s (`fetchall`) | 0.234 s / 4,277,065 rows/s (Arrow table) | 3.22x |
-| SQLite insert (1,000,000 rows, file) | 1.049 s / 953,309 rows/s (`executemany`) | 0.727 s / 1,375,882 rows/s (Arrow ingest) | 1.44x |
-| SQLite select (1,000,000 rows, file) | 0.933 s / 1,071,292 rows/s (`fetchall`) | 0.372 s / 2,690,989 rows/s (Arrow table) | 2.51x |
+| Bulk insert (1,000,000 rows, hook, Postgres) | 17.735 s / 56,386 rows/s (`PostgresHook.insert_rows`) | 1.757 s / 569,012 rows/s (Arrow ingest) | 10.09x |
+| Bulk select (1,000,000 rows, hook, Postgres) | 1.102 s / 907,085 rows/s (`cursor.fetchall`) | 0.457 s / 2,189,295 rows/s (Arrow table) | 2.41x |
+| Transfer (1,000,000 rows extract + load, hook ETL) | 19.708 s / 50,740 rows/s (row fetch + `insert_rows`) | 2.337 s / 427,838 rows/s (Arrow compute + ingest) | 8.43x |
+| `SQLExecuteQueryOperator` INSERT...SELECT (1,000,000 rows, Postgres) | 6.674 s / 149,825 rows/s | 7.524 s / 132,917 rows/s | 0.89x |
+| Stock `GenericTransfer` (`insert_rows`) | 19.629 s / 50,944 rows/s | 30.429 s / 32,864 rows/s | 0.65x |
+| `AdbcArrowTransfer` (custom, Arrow ingest) | 8.077 s / 123,807 rows/s (traditional source) | 7.984 s / 125,253 rows/s (ADBC source) | 3.81x vs stock ADBC `insert_rows` |
+| DuckDB insert (1,000,000 rows, file) | 528.324 s / 1,893 rows/s (`executemany`) | 0.713 s / 1,401,873 rows/s (Arrow ingest) | 740.64x |
+| DuckDB select (1,000,000 rows, file) | 0.760 s / 1,315,384 rows/s (`fetchall`) | 0.202 s / 4,948,879 rows/s (Arrow table) | 3.76x |
+| SQLite insert (1,000,000 rows, file) | 1.092 s / 916,018 rows/s (`executemany`) | 0.769 s / 1,300,842 rows/s (Arrow ingest) | 1.42x |
+| SQLite select (1,000,000 rows, file) | 0.928 s / 1,077,518 rows/s (`fetchall`) | 0.366 s / 2,730,549 rows/s (Arrow table) | 2.53x |
 
-`SQLExecuteQueryOperator` is server-side `INSERT...SELECT`, so hook choice barely moves the number. `GenericTransfer` on ADBC dest casts `price` to `float8` because `AdbcHook.insert_rows` cannot bind PostgreSQL `NUMERIC`; that row-based path is slower than `PostgresHook.insert_rows` on this AF 3.3.2 stack. DuckDB traditional insert is `executemany` of 1e6 Python tuples vs one Arrow ingest; that gap is the API, not a query planner contest. Re-run locally: hardware and cache state will move the digits.
+Transfer-path comparison at the same N (seconds, `TaskInstance.duration` for operators):
+
+| Path | Time | Dest write |
+| --- | --- | --- |
+| Stock `GenericTransfer` traditional | 19.629 s | `PostgresHook.insert_rows` |
+| Stock `GenericTransfer` ADBC dest | 30.429 s | `AdbcHook.insert_rows` (row-based; dest `price` is float8) |
+| `AdbcArrowTransfer` traditional source | 8.077 s | `adbc_ingest` into NUMERIC |
+| `AdbcArrowTransfer` ADBC source | 7.984 s | `adbc_ingest` into NUMERIC |
+| Hook ETL traditional | 19.708 s | `PostgresHook.insert_rows` (plus 10% discount) |
+| Hook ETL ADBC | 2.337 s | `adbc_ingest` in a Python callable (plus Arrow compute) |
+| `AdbcArrowTransfer` in `bench_transfer` | 3.680 s | same ingest API, operator wrapper, no transform |
+
+Stock `GenericTransfer` always uses dest `insert_rows`, even when the connection type is `adbc`. `AdbcArrowTransfer` (`include/operators/adbc_arrow_transfer.py`) is the Arrow-ingest dest path: `fetch_arrow_table` when the source is `AdbcHook`, else `get_records` converted to Arrow, then `cursor.adbc_ingest`. `SQLExecuteQueryOperator` is server-side `INSERT...SELECT`, so hook choice barely moves the number. DuckDB traditional insert is `executemany` of 1e6 Python tuples vs one Arrow ingest. Re-run locally: hardware and cache state will move the digits.
 
 ## DAGs
 
