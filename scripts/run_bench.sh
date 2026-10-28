@@ -131,7 +131,7 @@ echo ""
 trigger_and_wait "bench_transfer" "Transfer Benchmark (hook ETL, Postgres)" || failures=$((failures + 1))
 echo ""
 
-trigger_and_wait "bench_sql_operators" "SQL operators (SQLExecuteQueryOperator + GenericTransfer + AdbcArrowTransfer)" || failures=$((failures + 1))
+trigger_and_wait "bench_sql_operators" "SQL+transfer operators (SQLExecuteQuery, SQLInsertRows, SQLBulkLoad, GenericTransfer, AdbcArrowTransfer; postgres/odbc/adbc)" || failures=$((failures + 1))
 echo ""
 
 trigger_and_wait "bench_duckdb" "DuckDB file-backed (duckdb API vs ADBC)" || failures=$((failures + 1))
@@ -167,16 +167,31 @@ print_pair "include/results/bench_bulk_insert.json" "Bulk Insert (hook, Postgres
 print_pair "include/results/bench_bulk_select.json" "Bulk Select (hook, Postgres)"
 print_pair "include/results/bench_transfer.json" "Hook ETL (Python callable + 10% discount; not 1:1 vs GenericTransfer)"
 
-echo "### Operator-level: SQLExecuteQueryOperator"
-print_pair "include/results/bench_sql_execute.json" "SQLExecuteQueryOperator (Postgres)"
+echo "### Operator-level matrix (stock common.sql vs ODBC vs ADBC/Arrow)"
+if [ -f include/results/bench_operator_matrix.json ]; then
+    jq -r '
+        def fmt:
+          if .skipped then "skipped (\(.reason))"
+          else "\(.duration_seconds)s  \(.rows_per_second) rows/s"
+          end;
+        "SQLExecuteQueryOperator  postgres=\(.sql_execute_query_operator.postgres | fmt)  odbc=\(.sql_execute_query_operator.odbc | fmt)  adbc=\(.sql_execute_query_operator.adbc | fmt)",
+        "SQLInsertRowsOperator    postgres=\(.sql_insert_rows_operator.postgres | fmt)  odbc=\(.sql_insert_rows_operator.odbc | fmt)  adbc=\(.sql_insert_rows_operator.adbc | fmt)",
+        "SQLBulkLoadOperator      postgres=\(.sql_bulk_load_operator.postgres | fmt)  odbc=\(.sql_bulk_load_operator.odbc | fmt)  adbc=\(.sql_bulk_load_operator.adbc | fmt)",
+        "GenericTransfer          postgres=\(.generic_transfer.postgres | fmt)  odbc=\(.generic_transfer.odbc | fmt)  adbc=\(.generic_transfer.adbc | fmt)",
+        "AdbcArrowTransfer        from_postgres=\(.adbc_arrow_transfer.from_postgres | fmt)  from_adbc=\(.adbc_arrow_transfer.from_adbc | fmt)"
+    ' include/results/bench_operator_matrix.json
+    echo ""
+fi
 
-echo "### Operator-level: stock GenericTransfer vs AdbcArrowTransfer"
+print_pair "include/results/bench_sql_execute.json" "SQLExecuteQueryOperator (postgres vs adbc; odbc in matrix)"
+print_pair "include/results/bench_sql_insert_rows.json" "SQLInsertRowsOperator (postgres vs adbc; odbc in matrix)"
 print_pair "include/results/bench_generic_transfer.json" "Stock GenericTransfer (dest insert_rows)"
 
 if [ -f include/results/bench_arrow_transfer.json ]; then
-    echo "--- Stock GenericTransfer vs AdbcArrowTransfer (same operator interface) ---"
+    echo "--- Stock GenericTransfer vs AdbcArrowTransfer ---"
     jq -r '
         "Stock GenericTransfer traditional: \(.stock_generic_transfer_traditional.duration_seconds)s  \(.stock_generic_transfer_traditional.rows_per_second) rows/s",
+        "Stock GenericTransfer ODBC dest:   \(.stock_generic_transfer_odbc.duration_seconds)s  \(.stock_generic_transfer_odbc.rows_per_second) rows/s",
         "Stock GenericTransfer ADBC dest:   \(.stock_generic_transfer_adbc_insert_rows.duration_seconds)s  \(.stock_generic_transfer_adbc_insert_rows.rows_per_second) rows/s",
         "AdbcArrowTransfer traditional src: \(.adbc_arrow_transfer_from_traditional.duration_seconds)s  \(.adbc_arrow_transfer_from_traditional.rows_per_second) rows/s",
         "AdbcArrowTransfer ADBC source:     \(.adbc_arrow_transfer_from_adbc.duration_seconds)s  \(.adbc_arrow_transfer_from_adbc.rows_per_second) rows/s",

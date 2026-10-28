@@ -60,6 +60,21 @@ docker exec "$CONTAINER_ID" airflow connections add postgres_adbc \
     --conn-schema benchdb \
     --conn-extra '{"driver": "adbc_driver_postgresql", "db_kwargs": {"uri": "postgresql://benchuser:benchpass@postgres:5432/benchdb"}}'
 
+# ODBC PostgreSQL (OdbcHook / pyodbc + psqlODBC). Same compose Postgres as
+# postgres_traditional; protocol is ODBC (row-oriented), not libpq or ADBC.
+# sqlalchemy_scheme must be postgresql+pyodbc (OdbcHook defaults to mssql+pyodbc).
+# placeholder ? is pyodbc; Driver extra requires ALLOW_DRIVER_IN_EXTRA=true.
+echo "Creating 'postgres_odbc' connection..."
+docker exec "$CONTAINER_ID" airflow connections delete postgres_odbc 2>/dev/null || true
+docker exec "$CONTAINER_ID" airflow connections add postgres_odbc \
+    --conn-type odbc \
+    --conn-host postgres \
+    --conn-port 5432 \
+    --conn-login benchuser \
+    --conn-password benchpass \
+    --conn-schema benchdb \
+    --conn-extra '{"Driver":"PostgreSQL Unicode","driver":"PostgreSQL Unicode","sqlalchemy_scheme":"postgresql+pyodbc","placeholder":"?"}'
+
 # File-backed DuckDB (AdbcHook). Host uses '::' so AdbcHook passes the URI through.
 echo "Creating 'duckdb_adbc' connection..."
 docker exec "$CONTAINER_ID" airflow connections delete duckdb_adbc 2>/dev/null || true
@@ -83,7 +98,8 @@ docker exec "$CONTAINER_ID" airflow variables set BENCH_BATCH_SIZE "$BENCH_BATCH
 echo "Connections and variables configured."
 echo ""
 echo "Connections created:"
-echo "  - postgres_traditional: PostgresHook (psycopg2), conn type postgres"
+echo "  - postgres_traditional: PostgresHook (psycopg2 / libpq), conn type postgres"
+echo "  - postgres_odbc: OdbcHook (pyodbc + psqlODBC), conn type odbc"
 echo "  - postgres_adbc: AdbcHook, conn type adbc"
 echo "  - duckdb_adbc: AdbcHook -> file-backed DuckDB"
 echo "  - sqlite_adbc: AdbcHook -> file-backed SQLite"

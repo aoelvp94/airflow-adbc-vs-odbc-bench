@@ -2,19 +2,49 @@
 
 Local Airflow 3.3.2 demo of `AdbcHook` as an **opt-in** beside `OdbcHook` / `DbApiHook` (here, `PostgresHook`), not a replacement. Choose the path from workload and driver availability.
 
-Hook-level DAGs call hooks from `PythonOperator`. Operator-level DAG `bench_sql_operators` runs the same SQL through `SQLExecuteQueryOperator`, stock `GenericTransfer` (`insert_rows`), and custom `AdbcArrowTransfer` (`adbc_ingest`).
+Hook-level DAGs call hooks from `PythonOperator`. Operator-level DAG `bench_sql_operators` runs the same SQL / same N through every stock `common.sql` SQL and transfer operator that applies to Postgres↔Postgres, plus ODBC (`OdbcHook`) and custom `AdbcArrowTransfer`.
+
+## Protocol matrix
+
+ODBC/JDBC are row-oriented client protocols. ADBC is Arrow (columnar). This demo holds the **database** fixed (compose PostgreSQL 18) and varies the **protocol**.
+
+| Protocol | Client | Airflow hook | Data shape | Default stack |
+| --- | --- | --- | --- | --- |
+| libpq (native) | `psycopg2` | `PostgresHook` (conn type `postgres`) | Row | Yes |
+| ODBC | unixODBC + psqlODBC + `pyodbc` | `OdbcHook` (conn type `odbc`, `postgres_odbc`) | Row | Yes (same Postgres; no MSSQL container, no cloud creds) |
+| JDBC | — | not in this demo | Row | No |
+| ADBC | `adbc-driver-postgresql` | `AdbcHook` (conn type `adbc`) | Arrow | Yes |
+
+MSSQL/Oracle via ODBC still needs a vendor driver and is not in `./scripts/run_bench.sh`. See [ODBC_REFERENCE.md](ODBC_REFERENCE.md). JDBC is out of scope (no JDBC provider in this image).
 
 ## Engine matrix
 
 | Engine | Traditional path | ADBC path | Offline | Default runner |
 | --- | --- | --- | --- | --- |
-| PostgreSQL 18 (compose `postgres:18`) | `PostgresHook`; `SQLExecuteQueryOperator`; `GenericTransfer` | `AdbcHook`; same operators, conn type `adbc` | Yes | Yes |
+| PostgreSQL 18 (compose `postgres:18`) | `PostgresHook`; stock SQL/transfer operators | `AdbcHook`; same stock operators, conn type `adbc` | Yes | Yes |
+| PostgreSQL 18 over ODBC | `OdbcHook` + psqlODBC; same stock operators, conn type `odbc` | same `AdbcHook` (ADBC is not ODBC) | Yes | Yes |
 | DuckDB 2.0.0 (file in `include/data/`) | `duckdb` Python API | `AdbcHook` + bundled `adbc_driver_duckdb` | Yes | Yes |
 | SQLite (file in `include/data/`) | stdlib `sqlite3` | `AdbcHook` + `adbc_driver_sqlite` | Yes | Yes |
-| MSSQL / Oracle / Teradata | `OdbcHook` | `AdbcHook` only if a driver exists; MSSQL ADBC is experimental as of 2026 | No (ODBC driver or cloud) | No |
+| MSSQL / Oracle / Teradata | `OdbcHook` + vendor driver | `AdbcHook` only if a driver exists; MSSQL ADBC is experimental as of 2026 | No (extra driver or cloud) | No |
 | Snowflake / BigQuery / Databricks | Vendor hooks | Vendor ADBC drivers | No (accounts / heavy deps) | No |
 
 Snowflake, BigQuery, and Databricks are out of scope. This repo does not require cloud credentials.
+
+## Stock operator coverage (`common.sql` 2.1.1)
+
+Goal: stock operator + traditional hook vs stock operator + ADBC hook vs Arrow-aware operator, same SQL / same N where applicable. **No invented operators.**
+
+| Operator | PostgresHook | OdbcHook | AdbcHook | Arrow-aware | In `run_bench.sh` |
+| --- | --- | --- | --- | --- | --- |
+| `SQLExecuteQueryOperator` | Yes | Yes | Yes | n/a (server SQL) | Yes |
+| `SQLInsertRowsOperator` | Yes | Yes | Yes | no stock Arrow insert-from-Python operator | Yes |
+| `SQLBulkLoadOperator` | Yes (`COPY FROM STDIN`) | **N/A** (`OdbcHook.bulk_load` is `NotImplementedError`) | **N/A** (`AdbcHook.bulk_load` is `NotImplementedError`) | n/a | Yes (Postgres only) |
+| `GenericTransfer` | Yes (`get_records` + `insert_rows`) | Yes | Yes (still dest `insert_rows`) | custom `AdbcArrowTransfer` (`adbc_ingest`) | Yes |
+| `@task.sql` | same execute path as `SQLExecuteQueryOperator` | same | same | n/a | No (duplicate) |
+| `SQLCheckOperator` / `SQLColumnCheckOperator` / `SQLTableCheckOperator` / `SQLValueCheckOperator` / `SQLIntervalCheckOperator` / `SQLThresholdCheckOperator` | data-quality assertions, not bulk SQL/transfer | — | — | — | No |
+| `BranchSQLOperator` | control flow, not transfer | — | — | — | No |
+| `AnalyticsOperator` | DataFusion over files/object storage, not Postgres↔Postgres | — | — | — | No |
+| `PostgresOperator` / `PostgresToPostgresOperator` | **do not exist** in `apache-airflow-providers-postgres` 7.0.2 | — | — | — | No |
 
 ## Layer split
 
@@ -22,15 +52,15 @@ Snowflake, BigQuery, and Databricks are out of scope. This repo does not require
 | --- | --- | --- |
 | Hook | `bench_bulk_insert`, `bench_bulk_select`, `bench_transfer` | `PostgresHook` vs `AdbcHook` inside Python callables (insert_rows / fetchall vs Arrow ingest / `fetch_arrow_table`; hand-rolled ETL) |
 | Hook (local file) | `bench_duckdb`, `bench_sqlite` | Native Python API vs ADBC on a file in the compose volume |
-| Operator | `bench_sql_operators` | Airflow `SQLExecuteQueryOperator` (INSERT...SELECT); stock `common.sql` `GenericTransfer` (`get_records` + `insert_rows`); custom `AdbcArrowTransfer` (Arrow extract when source is ADBC, else row extract, then dest `adbc_ingest`). There is no `PostgresToPostgresOperator` in current providers. |
+| Operator | `bench_sql_operators` | Stock `SQLExecuteQueryOperator`, `SQLInsertRowsOperator`, `SQLBulkLoadOperator`, `GenericTransfer` on postgres / odbc / adbc connections; custom `AdbcArrowTransfer` dest `adbc_ingest`. Timed tasks run **serially** on LocalExecutor. |
 
 ## Stack
 
 - Apache Airflow 3.3.2 (`apache/airflow:3.3.2-python3.12`), LocalExecutor, api-server + dag-processor
 - PostgreSQL 18 (compose `postgres:18`; 18.6 at time of writing — not 19 RC)
 - File-backed DuckDB 2.0.0 LTS and SQLite under `include/data/` (no extra service)
-- Providers: `apache-airflow-providers-postgres` 7.0.2, `apache-airflow-providers-apache-arrow` 0.1.1, `apache-airflow-providers-common-sql` 2.1.1, `apache-airflow-providers-standard` 1.19.0
-- Drivers: `psycopg2-binary`, `adbc-driver-manager` / `adbc-driver-postgresql` / `adbc-driver-sqlite` 1.12.0 (constraints-3.3.2), `duckdb==2.0.0` (exports `adbc_driver_duckdb`; not in AF constraints)
+- Providers: `apache-airflow-providers-postgres` 7.0.2, `apache-airflow-providers-apache-arrow` 0.1.1, `apache-airflow-providers-common-sql` 2.1.1, `apache-airflow-providers-standard` 1.19.0, `apache-airflow-providers-odbc` 4.13.0
+- Drivers: `psycopg2-binary`, unixODBC + psqlODBC (`pyodbc`), `adbc-driver-manager` / `adbc-driver-postgresql` / `adbc-driver-sqlite` 1.12.0 (constraints-3.3.2), `duckdb==2.0.0` (exports `adbc_driver_duckdb`; not in AF constraints)
 - Docker Compose
 
 ## Quick Start
@@ -65,15 +95,27 @@ Operator unit tests (no Postgres): `PYTHONPATH=include pytest tests/ -q`.
 
 ## Sample timings (measured)
 
-Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon, 16 GiB RAM, Linux 6.12 x86_64, Airflow 3.3.2 LocalExecutor (`apache/airflow:3.3.2-python3.12`), PostgreSQL 18.6 (`postgres:18`), DuckDB 2.0.0. **N = `BENCH_ROW_COUNT` = 1,000,000**. Durations are seconds from `include/results/*.json`. Operator rows are Airflow `TaskInstance.duration`. Speedup is traditional / ADBC unless noted.
+Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon, 16 GiB RAM, Linux 6.12 x86_64, Airflow 3.3.2 LocalExecutor (`apache/airflow:3.3.2-python3.12`), PostgreSQL 18.6 (`postgres:18`), DuckDB 2.0.0. **N = `BENCH_ROW_COUNT` = 1,000,000**. Durations are seconds from `include/results/*.json`. Operator rows are Airflow `TaskInstance.duration` (or `SQLInsertRowsOperator.execute()` wall time). Speedup is traditional / ADBC unless noted.
 
-### Stock GenericTransfer vs AdbcArrowTransfer
+Hook-level and DuckDB/SQLite numbers below are from the PG18 / DuckDB 2.0.0 run on `main` (PR #4). **Operator-level rows that add ODBC / `SQLInsertRowsOperator` / `SQLBulkLoadOperator` are TBD until this branch’s N=1e6 re-bench** — they are not copied from the previous run and will not be invented.
 
-Same Airflow transfer-operator interface (`source_conn_id`, `destination_conn_id`, SQL, dest table). Stock `GenericTransfer` always dest-writes with `insert_rows`, even when the connection type is `adbc`. Custom `AdbcArrowTransfer` (`include/operators/adbc_arrow_transfer.py`) dest-writes with `cursor.adbc_ingest`.
+### Stock operator matrix (TBD — measure on this stack)
+
+| Operator | PostgresHook (libpq) | OdbcHook (psqlODBC) | AdbcHook | Arrow-aware |
+| --- | --- | --- | --- | --- |
+| `SQLExecuteQueryOperator` | TBD | TBD | TBD | n/a |
+| `SQLInsertRowsOperator` | TBD | TBD | TBD | none (stock) |
+| `SQLBulkLoadOperator` | TBD | N/A (`NotImplementedError`) | N/A (`NotImplementedError`) | n/a |
+| `GenericTransfer` | TBD | TBD | TBD | `AdbcArrowTransfer` TBD |
+
+### Stock GenericTransfer vs AdbcArrowTransfer (previous serialized-parallel run; will be replaced)
+
+Same Airflow transfer-operator interface (`source_conn_id`, `destination_conn_id`, SQL, dest table). Stock `GenericTransfer` always dest-writes with `insert_rows`, even when the connection type is `adbc` or `odbc`. Custom `AdbcArrowTransfer` (`include/operators/adbc_arrow_transfer.py`) dest-writes with `cursor.adbc_ingest`.
 
 | Path | Time | Dest write |
 | --- | --- | --- |
 | Stock `GenericTransfer` traditional | 18.614 s / 53,723 rows/s | `PostgresHook.insert_rows` |
+| Stock `GenericTransfer` ODBC dest | TBD | `OdbcHook.insert_rows` |
 | Stock `GenericTransfer` ADBC dest | 29.991 s / 33,344 rows/s | `AdbcHook.insert_rows` (row-based; dest `price` is float8) |
 | `AdbcArrowTransfer` traditional source | 6.525 s / 153,261 rows/s | `adbc_ingest` into NUMERIC |
 | `AdbcArrowTransfer` ADBC source | 6.468 s / 154,613 rows/s | `adbc_ingest` into NUMERIC (**4.64x** vs stock ADBC `insert_rows`) |
@@ -84,7 +126,7 @@ Same Airflow transfer-operator interface (`source_conn_id`, `destination_conn_id
 | --- | --- | --- | --- |
 | Bulk insert (hook, Postgres) | 17.358 s / 57,609 rows/s (`insert_rows`) | 1.793 s / 557,763 rows/s (Arrow ingest) | 9.68x |
 | Bulk select (hook, Postgres) | 1.362 s / 734,120 rows/s (`fetchall`) | 0.544 s / 1,837,101 rows/s (Arrow table) | 2.50x |
-| `SQLExecuteQueryOperator` INSERT...SELECT | 5.430 s / 184,167 rows/s | 5.860 s / 170,646 rows/s | 0.93x |
+| `SQLExecuteQueryOperator` INSERT...SELECT | 5.430 s / 184,167 rows/s (to be re-measured with ODBC) | 5.860 s / 170,646 rows/s | 0.93x |
 | DuckDB insert (file) | 666.407 s / 1,501 rows/s (`executemany`) | 0.239 s / 4,187,294 rows/s (Arrow ingest) | 2790.44x |
 | DuckDB select (file) | 0.659 s / 1,518,207 rows/s (`fetchall`) | 0.237 s / 4,220,849 rows/s (Arrow table) | 2.78x |
 | SQLite insert (file) | 1.093 s / 914,870 rows/s (`executemany`) | 0.868 s / 1,151,936 rows/s (Arrow ingest) | 1.26x |
@@ -124,14 +166,16 @@ Footnotes only: different code path (callable vs operator), extra transform on t
 - ADBC: Arrow table, Arrow compute, Arrow write
 - Also runs `AdbcArrowTransfer` as a side task (copy, no transform). That duration is a footnote, not a peer of stock `GenericTransfer`.
 
-### Operator-level (Postgres)
+### Operator-level (Postgres libpq / ODBC / ADBC)
 
-`bench_sql_operators`:
+`bench_sql_operators` (timed tasks serialized):
 
-- `SQLExecuteQueryOperator` on `postgres_traditional` and `postgres_adbc` (`INSERT ... SELECT`)
-- Stock `GenericTransfer` on the same pair (`get_records` + dest `insert_rows`)
+- `SQLExecuteQueryOperator` on `postgres_traditional`, `postgres_odbc`, `postgres_adbc` (`INSERT ... SELECT`)
+- `SQLInsertRowsOperator` on the same three connections (Python tuples → `insert_rows`)
+- `SQLBulkLoadOperator` on `postgres_traditional` only (`COPY FROM STDIN` from a TSV of `bench_source`)
+- Stock `GenericTransfer` on each protocol pair (`get_records` + dest `insert_rows`)
 - Custom `AdbcArrowTransfer` from traditional source and from ADBC source; dest is always `adbc_ingest` into NUMERIC
-- Durations are Airflow `TaskInstance.duration` for those operator tasks
+- Durations are Airflow `TaskInstance.duration`, except `SQLInsertRowsOperator` which records `execute()` wall time after row generation
 
 ### Hook-level (local files)
 
@@ -167,14 +211,17 @@ Tested stack (personal demo; not a guarantee for every 3.x patch):
 [x] Python 3.12
 [x] apache-airflow-providers-apache-arrow == 0.1.1  (AdbcHook; conn type adbc)
 [x] apache-airflow-providers-postgres == 7.0.2     (PostgresHook; conn type postgres)
-[x] apache-airflow-providers-common-sql == 2.1.1   (GenericTransfer, SQLExecuteQueryOperator)
+[x] apache-airflow-providers-common-sql == 2.1.1   (SQLExecuteQuery, SQLInsertRows, SQLBulkLoad, GenericTransfer)
 [x] apache-airflow-providers-standard == 1.19.0    (PythonOperator)
+[x] apache-airflow-providers-odbc == 4.13.0        (OdbcHook; conn type odbc)
 [x] constraints-3.3.2 / constraints-3.12.txt
 [x] PostgreSQL 18 (compose postgres:18; 18.6 at time of writing — not 19 RC)
 [x] duckdb == 2.0.0 (exports adbc_driver_duckdb; not in AF constraints)
 [x] adbc-driver-manager / adbc-driver-postgresql / adbc-driver-sqlite == 1.12.0 (constraints-3.3.2)
+[x] unixODBC + psqlODBC (Driver=PostgreSQL Unicode) via postgres_odbc
 [x] AdbcHook.get_conn() + cursor.adbc_ingest / fetch_arrow_table
-[x] PostgresHook.insert_rows / get_records / run
+[x] PostgresHook.insert_rows / get_records / run / bulk_load (COPY)
+[x] OdbcHook.insert_rows / get_records / run
 ```
 
 Arrow provider 0.1.1 is not in the 3.3.2 constraints file; the Dockerfile still pins it and verifies `from airflow.providers.apache.arrow.hooks.adbc import AdbcHook`. DAGs use `schedule=` and `airflow.sdk` (`DAG`, `Variable`). Not tested on Airflow 2.x or 3.0–3.2.
@@ -203,16 +250,18 @@ ADBC is the better fit when:
 
 ## ODBC
 
-Same split for MSSQL and other ODBC targets. See [ODBC_REFERENCE.md](ODBC_REFERENCE.md). This path is not in `./scripts/run_bench.sh`.
+Default stack uses **PostgreSQL via unixODBC + psqlODBC** (`postgres_odbc`) so ODBC vs libpq vs ADBC is the same engine, offline, no extra container. `./scripts/run_bench.sh` includes those operator tasks.
+
+MSSQL/Oracle still need a vendor ODBC driver and are not in the default runner. See [ODBC_REFERENCE.md](ODBC_REFERENCE.md).
 
 ```python
-# Traditional ODBC (row-based)
+# ODBC (row-based) — demo conn postgres_odbc, or mssql_odbc with a vendor driver
 from airflow.providers.odbc.hooks.odbc import OdbcHook
-hook = OdbcHook(odbc_conn_id='my_mssql')
+hook = OdbcHook(odbc_conn_id='postgres_odbc')
 
-# ADBC (Arrow-based, when a driver is installed)
+# ADBC (Arrow-based)
 from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
-hook = AdbcHook(adbc_conn_id='my_mssql_adbc')
+hook = AdbcHook(adbc_conn_id='postgres_adbc')
 ```
 
 ## Project Structure
@@ -223,7 +272,7 @@ hook = AdbcHook(adbc_conn_id='my_mssql_adbc')
 │   ├── bench_bulk_insert.py       # Hook insert (Postgres)
 │   ├── bench_bulk_select.py       # Hook select (Postgres)
 │   ├── bench_transfer.py          # Hook ETL (Python callable; not GenericTransfer)
-│   ├── bench_sql_operators.py     # SQLExecuteQueryOperator + GenericTransfer + AdbcArrowTransfer
+│   ├── bench_sql_operators.py     # Stock SQL+transfer ops × postgres/odbc/adbc + AdbcArrowTransfer
 │   ├── bench_duckdb.py            # File-backed DuckDB
 │   └── bench_sqlite.py            # File-backed SQLite
 ├── include/
