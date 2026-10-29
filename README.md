@@ -4,6 +4,24 @@ Local Airflow 3.3.2 demo of `AdbcHook` as an **opt-in** beside `OdbcHook` / `DbA
 
 Hook-level DAGs call hooks from `PythonOperator`. Operator-level DAG `bench_sql_operators` runs the same SQL / same N through every stock `common.sql` SQL and transfer operator that applies to Postgres↔Postgres, plus ODBC (`OdbcHook`) and custom `AdbcArrowTransfer`.
 
+## TL;DR
+
+Stock `GenericTransfer` / `SQLInsertRowsOperator` still dest-write with `insert_rows` even when `conn_type=adbc` (no `adbc_ingest`).
+
+N=1e6 from [Sample timings](#sample-timings-measured):
+
+| Path | Time |
+| --- | --- |
+| Stock `GenericTransfer` libpq | ~14.6 s |
+| Stock `GenericTransfer` ADBC | ~31.2 s |
+| Stock `GenericTransfer` ODBC | ~65.2 s |
+| `AdbcArrowTransfer` | ~3.4–4.0 s (~9× vs stock ADBC GT) |
+| `SQLExecuteQueryOperator` `INSERT…SELECT` | ~2.5 s (tied; server-side) |
+
+Post-load verify: `COUNT(*)` + ordered md5 on copy paths matched `bench_source` (see [Post-load verification](#post-load-verification)). `SQLInsertRowsOperator` / hook ETL are COUNT-only by design.
+
+Personal demo; not upstream yet.
+
 ## Protocol matrix
 
 ODBC/JDBC are row-oriented client protocols. ADBC is Arrow (columnar). This demo holds the **database** fixed (compose PostgreSQL 18) and varies the **protocol**.
