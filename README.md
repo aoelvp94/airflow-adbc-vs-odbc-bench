@@ -18,6 +18,7 @@ N=1e6 from [Sample timings](#sample-timings-measured):
 | Stock `GenericTransfer` ADBC | ~31.2 s |
 | Stock `GenericTransfer` ODBC | ~65.2 s |
 | `AdbcArrowTransfer` | ~3.4–4.0 s (~9× vs stock ADBC GT) |
+| `CapabilityGenericTransfer` both-ends Arrow | **2.765 s** (11.35× vs stock ADBC GT; [BENCHMARK.md](BENCHMARK.md), 2026-11-03) |
 | `SQLExecuteQueryOperator` `INSERT…SELECT` | ~2.5 s (tied; server-side) |
 
 Post-load verify: `COUNT(*)` + ordered md5 on copy paths matched `bench_source` (see [Post-load verification](#post-load-verification)). `SQLInsertRowsOperator` / hook ETL are COUNT-only by design.
@@ -151,7 +152,7 @@ Same Airflow transfer-operator interface (`source_conn_id`, `destination_conn_id
 | Stock `GenericTransfer` ADBC dest | 31.209 s / 32,042 rows/s | `AdbcHook.insert_rows` (row-based; dest `price` is float8) |
 | `AdbcArrowTransfer` traditional source | 4.035 s / 247,846 rows/s | `adbc_ingest` into NUMERIC |
 | `AdbcArrowTransfer` ADBC source | 3.371 s / 296,629 rows/s | `adbc_ingest` into NUMERIC (**9.26x** vs stock ADBC `insert_rows`) |
-| `CapabilityGenericTransfer` ADBC source+dest | *run `bench_capability_transfer`* | both-ends `get_record_batches` → `adbc_ingest` (Phase-2 stub; not in the 2026-10-28 sample) |
+| `CapabilityGenericTransfer` ADBC source+dest | **2.765 s** / 361,627 rows/s ([BENCHMARK.md](BENCHMARK.md), 2026-11-03, N=1e6) | both-ends `get_record_batches` → `adbc_ingest` (**11.35×** vs stock ADBC `insert_rows`) |
 
 ### Other hook-level / file-engine results
 
@@ -360,6 +361,7 @@ hook = AdbcHook(adbc_conn_id='postgres_adbc')
 │   ├── run_bench.sh
 │   ├── setup_connections.sh
 │   └── wait_for_airflow.sh
+├── BENCHMARK.md                   # Measured Phase-2 timings (compose run)
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt
