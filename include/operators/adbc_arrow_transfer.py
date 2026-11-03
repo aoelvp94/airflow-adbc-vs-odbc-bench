@@ -66,6 +66,17 @@ def records_to_arrow(rows: Sequence[Sequence[Any]], columns: Sequence[str]) -> p
     return pa.table(arrays)
 
 
+def prepare_ingest_batch(batch: pa.RecordBatch, columns: Sequence[str] | None) -> pa.RecordBatch:
+    """Same casts as ``prepare_ingest_table`` for one RecordBatch."""
+    table = prepare_ingest_table(pa.Table.from_batches([batch]), columns)
+    out = table.to_batches()
+    if not out:
+        return pa.RecordBatch.from_pylist([], schema=table.schema)
+    if len(out) == 1:
+        return out[0]
+    return pa.concat_batches(out)
+
+
 def prepare_ingest_table(table: pa.Table, columns: Sequence[str] | None) -> pa.Table:
     """Reorder/cast columns so PostgreSQL COPY accepts the batch."""
     if columns:

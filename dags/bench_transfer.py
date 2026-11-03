@@ -4,8 +4,9 @@ Benchmark: Data Transfer Comparison
 Compares traditional PostgresHook vs AdbcHook for extract-transform-load patterns.
 
 Also runs ``AdbcArrowTransfer`` (operator, Arrow ingest, no transform) so the
-suite can compare hook ETL vs stock GenericTransfer vs custom Arrow ingest.
-Stock GenericTransfer lives in ``bench_sql_operators``.
+suite can compare hook ETL vs custom Arrow ingest. Stock GenericTransfer and
+the AIP Phase-2 ``CapabilityGenericTransfer`` live in ``bench_sql_operators``
+and ``bench_capability_transfer``.
 """
 
 from datetime import datetime, timedelta

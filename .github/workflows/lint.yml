@@ -33,8 +33,8 @@ jobs:
       - name: Lint with flake8
         run: |
           pip install flake8
-          flake8 dags/ include/operators/ --count --select=E9,F63,F7,F82 --show-source --statistics
-          flake8 dags/ include/operators/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+          flake8 dags/ include/operators/ include/adapters/ include/protocols/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 dags/ include/operators/ include/adapters/ include/protocols/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
       - name: Unit test AdbcArrowTransfer vs GenericTransfer
         run: |
@@ -58,6 +58,7 @@ jobs:
               'bench_bulk_select.py',
               'bench_transfer.py',
               'bench_sql_operators.py',
+              'bench_capability_transfer.py',
               'bench_duckdb.py',
               'bench_sqlite.py',
           ]

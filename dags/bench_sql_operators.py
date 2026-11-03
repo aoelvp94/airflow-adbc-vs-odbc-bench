@@ -9,6 +9,7 @@ Measured (stock operators that exist in apache-airflow-providers-common-sql 2.1.
 - SQLBulkLoadOperator      (conn: postgres only; AdbcHook/OdbcHook.bulk_load is NotImplementedError)
 - GenericTransfer          (src+dest: postgres / odbc / adbc) — dest insert_rows
 - AdbcArrowTransfer        (custom GenericTransfer dest using adbc_ingest)
+- CapabilityGenericTransfer (Adbc src+dest RecordBatch E2E; else row fallback)
 
 Not measured (exist but are not SQL/transfer workloads):
 - SQLCheckOperator, SQLColumnCheckOperator, SQLTableCheckOperator,
@@ -45,6 +46,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "include"))
 from operators.adbc_arrow_transfer import AdbcArrowTransfer
+from operators.capability_generic_transfer import CapabilityGenericTransfer
 from utils.benchmark_utils import (
     DEFAULT_ROW_COUNT,
     BenchmarkTimer,
@@ -75,6 +77,7 @@ OP_TABLES = (
     "bench_op_xfer_adbc",
     "bench_op_xfer_arrow_from_pg",
     "bench_op_xfer_arrow_from_adbc",
+    "bench_op_xfer_capability_adbc",
 )
 
 # Tables without SERIAL so SQLBulkLoadOperator's COPY table FROM STDIN matches TSV.
@@ -309,6 +312,7 @@ def save_operator_results(**context):
     )
     arrow_from_pg = _duration("arrow_transfer_from_traditional")
     arrow_from_adbc = _duration("arrow_transfer_from_adbc")
+    capability_adbc = _duration("capability_transfer_from_adbc")
     write_benchmark_json(
         "bench_arrow_transfer",
         {
@@ -318,14 +322,22 @@ def save_operator_results(**context):
             "stock_generic_transfer_adbc_insert_rows": duration_entry(gt_adbc, row_count),
             "adbc_arrow_transfer_from_traditional": duration_entry(arrow_from_pg, row_count),
             "adbc_arrow_transfer_from_adbc": duration_entry(arrow_from_adbc, row_count),
+            "capability_generic_transfer_adbc_columnar": duration_entry(
+                capability_adbc, row_count
+            ),
             "speedup_vs_stock_adbc_insert_rows": round(gt_adbc / arrow_from_adbc, 2)
             if arrow_from_adbc > 0
+            else 0,
+            "speedup_capability_vs_stock_adbc_gt": round(gt_adbc / capability_adbc, 2)
+            if capability_adbc > 0
             else 0,
             "metadata": {
                 "layer": "operator",
                 "note": (
                     "Stock GenericTransfer uses dest insert_rows on postgres, odbc, or adbc. "
-                    "AdbcArrowTransfer dest-writes with cursor.adbc_ingest."
+                    "AdbcArrowTransfer dest-writes with cursor.adbc_ingest. "
+                    "CapabilityGenericTransfer streams RecordBatches when both ends "
+                    "advertise Arrow read/write (Adbc source + Adbc dest)."
                 ),
             },
         },
@@ -359,6 +371,9 @@ def save_operator_results(**context):
                 "from_postgres": duration_entry(arrow_from_pg, row_count),
                 "from_adbc": duration_entry(arrow_from_adbc, row_count),
             },
+            "capability_generic_transfer": {
+                "adbc_both_ends": duration_entry(capability_adbc, row_count),
+            },
         },
     )
 
@@ -376,7 +391,8 @@ with DAG(
     default_args=default_args,
     description=(
         "Stock common.sql SQL+transfer operators vs ODBC vs ADBC/Arrow "
-        "(SQLExecuteQuery, SQLInsertRows, SQLBulkLoad, GenericTransfer, AdbcArrowTransfer)"
+        "(SQLExecuteQuery, SQLInsertRows, SQLBulkLoad, GenericTransfer, "
+        "AdbcArrowTransfer, CapabilityGenericTransfer)"
     ),
     schedule=None,
     start_date=datetime(2024, 1, 1),
@@ -511,6 +527,16 @@ with DAG(
         insert_args=insert_fields,
         on_success_callback=record_operator_duration,
     )
+    capability_adbc = CapabilityGenericTransfer(
+        task_id="capability_transfer_from_adbc",
+        source_conn_id="postgres_adbc",
+        destination_conn_id="postgres_adbc",
+        destination_table="bench_op_xfer_capability_adbc",
+        sql=extract_sql,
+        preoperator="TRUNCATE TABLE bench_op_xfer_capability_adbc",
+        insert_args=insert_fields,
+        on_success_callback=record_operator_duration,
+    )
 
     verify = PythonOperator(
         task_id="verify_operator_loads",
@@ -537,6 +563,7 @@ with DAG(
         xfer_adbc,
         arrow_from_traditional,
         arrow_from_adbc,
+        capability_adbc,
     ]
     setup >> timed[0]
     for left, right in zip(timed, timed[1:]):
