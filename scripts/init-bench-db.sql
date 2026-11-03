@@ -154,6 +154,16 @@ CREATE TABLE IF NOT EXISTS bench_cap_arrow (
     created_at TIMESTAMP
 );
 
+-- DuckDB -> Postgres Phase-2 dest (NUMERIC; native DuckDB Arrow -> adbc_ingest)
+CREATE TABLE IF NOT EXISTS bench_cap_ddb_to_pg (
+    id SERIAL PRIMARY KEY,
+    product_name VARCHAR(100),
+    category VARCHAR(50),
+    price NUMERIC(10, 2),
+    quantity INTEGER,
+    created_at TIMESTAMP
+);
+
 -- Grant all privileges to benchuser
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO benchuser;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO benchuser;

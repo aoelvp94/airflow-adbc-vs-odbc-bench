@@ -10,16 +10,17 @@ Stock `GenericTransfer` / `SQLInsertRowsOperator` still dest-write with `insert_
 
 This repo also prototypes **AIP Phase-2** locally (not upstream): `RecordBatchReadable` / `RecordBatchWritable` protocols plus `CapabilityGenericTransfer`. When **both** hooks advertise Arrow read/write, the helper streams RecordBatches end-to-end; otherwise it uses the stock `get_records` → `insert_rows` path. `AdbcArrowTransfer` remains the dest-only ingest comparison.
 
-N=1e6 from [Sample timings](#sample-timings-measured):
+N=1e6 from [Sample timings](#sample-timings-measured) and [BENCHMARK.md](BENCHMARK.md):
 
 | Path | Time |
 | --- | --- |
-| Stock `GenericTransfer` libpq | ~14.6 s |
-| Stock `GenericTransfer` ADBC | ~31.2 s |
-| Stock `GenericTransfer` ODBC | ~65.2 s |
-| `AdbcArrowTransfer` | ~3.4–4.0 s (~9× vs stock ADBC GT) |
-| `CapabilityGenericTransfer` both-ends Arrow | **2.765 s** (11.35× vs stock ADBC GT; [BENCHMARK.md](BENCHMARK.md), 2026-11-03) |
-| `SQLExecuteQueryOperator` `INSERT…SELECT` | ~2.5 s (tied; server-side) |
+| Stock `GenericTransfer` libpq | 14.320 s |
+| Stock `GenericTransfer` ADBC | 28.443 s (31.395 s in the dedicated Phase-2 DAG) |
+| Stock `GenericTransfer` ODBC | 60.513 s (row path; **not** in the 11.35× ratio) |
+| `AdbcArrowTransfer` | ~3.4–4.2 s |
+| `CapabilityGenericTransfer` both-ends Arrow | **2.765 s** (11.35× vs stock ADBC GT; [BENCHMARK.md](BENCHMARK.md) section 1) |
+| DuckDB ↔ Postgres RecordBatch | 0.428–1.989 s ([BENCHMARK.md](BENCHMARK.md) section 3) |
+| `SQLExecuteQueryOperator` `INSERT…SELECT` | ~2.6–2.9 s (tied; server-side) |
 
 Post-load verify: `COUNT(*)` + ordered md5 on copy paths matched `bench_source` (see [Post-load verification](#post-load-verification)). `SQLInsertRowsOperator` / hook ETL are COUNT-only by design.
 
@@ -75,6 +76,7 @@ Goal: stock operator + traditional hook vs stock operator + ADBC hook vs Arrow-a
 | Hook (local file) | `bench_duckdb`, `bench_sqlite` | Native Python API vs ADBC on a file in the compose volume |
 | Operator | `bench_sql_operators` | Stock `SQLExecuteQueryOperator`, `SQLInsertRowsOperator`, `SQLBulkLoadOperator`, `GenericTransfer` on postgres / odbc / adbc connections; custom `AdbcArrowTransfer` dest `adbc_ingest`; local `CapabilityGenericTransfer` (Adbc source + Adbc dest RecordBatch path). Timed tasks run **serially** on LocalExecutor. Untimed `verify_operator_loads` runs after the matrix and is not in `BenchmarkTimer` / `on_success_callback` durations. |
 | Operator (AIP Phase-2) | `bench_capability_transfer` | Stock `GenericTransfer` ADBC row path vs `CapabilityGenericTransfer` both-ends RecordBatch vs `AdbcArrowTransfer` dest ingest. Same SQL / same N. Post-load COUNT + payload digest vs `bench_source`. |
+| Operator (AIP Phase-2 multi-engine) | `bench_capability_duckdb` | `DuckDBArrowCapabilityAdapter` ↔ DuckDB and ↔ Postgres Adbc using the same RecordBatch helper. Timed tasks serialized. DuckDB dests verified in DuckDB; Postgres dest vs `bench_source`. |
 
 ## Stack
 
@@ -94,7 +96,7 @@ Goal: stock operator + traditional hook vs stock operator + ADBC hook vs Arrow-a
 
 ### Reproduce the N=1,000,000 timings
 
-Volume knob is **`BENCH_ROW_COUNT`**. `.env.example` sets it to `1000000`. `docker-compose.yml` injects `${BENCH_ROW_COUNT:-1000000}` into every Airflow service. `./scripts/setup_connections.sh` copies that value into Airflow Variable `BENCH_ROW_COUNT` (hook DAGs read it at runtime). Operator SQL `LIMIT` is taken from the same container env at DAG parse. `./scripts/run_bench.sh` prints `BENCH_ROW_COUNT` and triggers all six DAGs.
+Volume knob is **`BENCH_ROW_COUNT`**. `.env.example` sets it to `1000000`. `docker-compose.yml` injects `${BENCH_ROW_COUNT:-1000000}` into every Airflow service. `./scripts/setup_connections.sh` copies that value into Airflow Variable `BENCH_ROW_COUNT` (hook DAGs read it at runtime). Operator SQL `LIMIT` is taken from the same container env at DAG parse. `./scripts/run_bench.sh` prints `BENCH_ROW_COUNT` and triggers all seven DAGs.
 
 ```bash
 git clone https://github.com/aoelvp94/airflow-adbc-vs-odbc-bench.git
@@ -126,18 +128,28 @@ docker exec "$(docker compose ps -q airflow-apiserver)" airflow dags trigger ben
 
 JSON: `include/results/bench_capability_transfer.json`. Compose is required for the timed DAG (PostgreSQL 18 + Airflow); CI runs unit tests and DAG import only, not the full 1e6-row compose bench.
 
+Multi-engine DuckDB path (after the same stack is up):
+
+```bash
+docker exec "$(docker compose ps -q airflow-apiserver)" airflow dags unpause bench_capability_duckdb
+docker exec "$(docker compose ps -q airflow-apiserver)" airflow dags trigger bench_capability_duckdb
+cat include/results/bench_capability_duckdb.json
+```
+
 ## Sample timings (measured)
 
-Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon, 16 GiB RAM, Linux 6.12 x86_64, Airflow 3.3.2 LocalExecutor (`apache/airflow:3.3.2-python3.12`), PostgreSQL 18.6 (`postgres:18`), DuckDB 2.0.0, unixODBC + psqlODBC. **N = `BENCH_ROW_COUNT` = 1,000,000**. Durations are seconds from `include/results/*.json`. Operator rows are Airflow `TaskInstance.duration` (or `SQLInsertRowsOperator.execute()` wall time). Timed operator tasks ran serially. Speedup is traditional / ADBC unless noted.
+Operator matrix and DuckDB multi-engine: 2026-11-03, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon, 16 GiB RAM, Linux 6.12.94+ x86_64, Airflow 3.3.2 LocalExecutor (`apache/airflow:3.3.2-python3.12`), PostgreSQL 18.6 (`postgres:18`), DuckDB 2.0.0, unixODBC + psqlODBC. **N = `BENCH_ROW_COUNT` = 1,000,000**. Durations are seconds from `include/results/*.json`. Operator rows are Airflow `TaskInstance.duration` (or `SQLInsertRowsOperator.execute()` / `BenchmarkTimer` wall time). Timed operator tasks ran serially. Full write-up with separated tables: [BENCHMARK.md](BENCHMARK.md).
+
+Hook-level / file-engine rows below that are not in BENCHMARK.md are the earlier 2026-10-28 run on the same stack class.
 
 ### Stock operator matrix (same SQL / same N)
 
 | Operator | PostgresHook (libpq) | OdbcHook (psqlODBC) | AdbcHook | Arrow-aware |
 | --- | --- | --- | --- | --- |
-| `SQLExecuteQueryOperator` | 2.532 s / 394,909 rows/s | 2.487 s / 402,129 rows/s | 2.459 s / 406,703 rows/s | n/a (server `INSERT...SELECT`) |
-| `SQLInsertRowsOperator` | 11.781 s / 84,883 rows/s | 59.047 s / 16,936 rows/s | 28.453 s / 35,146 rows/s | none (stock) |
-| `SQLBulkLoadOperator` | 1.611 s / 620,801 rows/s (`COPY`) | N/A (`bulk_load` NotImplementedError) | N/A (`bulk_load` NotImplementedError) | n/a |
-| `GenericTransfer` | 14.584 s / 68,570 rows/s | 65.187 s / 15,341 rows/s | 31.209 s / 32,042 rows/s | `AdbcArrowTransfer` / `CapabilityGenericTransfer` below |
+| `SQLExecuteQueryOperator` | 2.602 s / 384,314 rows/s | 2.637 s / 379,278 rows/s | 2.905 s / 344,222 rows/s | n/a (server `INSERT...SELECT`) |
+| `SQLInsertRowsOperator` | 13.734 s / 72,810 rows/s | 58.057 s / 17,225 rows/s | 26.656 s / 37,514 rows/s | none (stock) |
+| `SQLBulkLoadOperator` | 1.689 s / 591,986 rows/s (`COPY`) | N/A (`bulk_load` NotImplementedError) | N/A (`bulk_load` NotImplementedError) | n/a |
+| `GenericTransfer` | 14.320 s / 69,834 rows/s | 60.513 s / 16,525 rows/s | 28.443 s / 35,158 rows/s | `AdbcArrowTransfer` / `CapabilityGenericTransfer` below |
 
 Server-side `SQLExecuteQueryOperator` barely moves with hook choice. Row `insert_rows` (SQLInsertRows / GenericTransfer) is slowest on ODBC, then ADBC, then libpq. Native `COPY` is the fastest stock load on Postgres.
 
@@ -145,14 +157,18 @@ Server-side `SQLExecuteQueryOperator` barely moves with hook choice. Row `insert
 
 Same Airflow transfer-operator interface (`source_conn_id`, `destination_conn_id`, SQL, dest table). Stock `GenericTransfer` always dest-writes with `insert_rows`, even when the connection type is `adbc` or `odbc`. Custom `AdbcArrowTransfer` (`include/operators/adbc_arrow_transfer.py`) dest-writes with `cursor.adbc_ingest` (source may still be row-based). Local `CapabilityGenericTransfer` (`include/operators/capability_generic_transfer.py`) streams RecordBatches only when **both** wrapped hooks advertise the Phase-2 protocols.
 
+ODBC GenericTransfer (60.513 s) is a row protocol path. It is **not** part of the 11.35× Phase-2 ratio ([BENCHMARK.md](BENCHMARK.md) section 1).
+
 | Path | Time | Dest write |
 | --- | --- | --- |
-| Stock `GenericTransfer` traditional | 14.584 s / 68,570 rows/s | `PostgresHook.insert_rows` |
-| Stock `GenericTransfer` ODBC dest | 65.187 s / 15,341 rows/s | `OdbcHook.insert_rows` (row-based; dest `price` is float8) |
-| Stock `GenericTransfer` ADBC dest | 31.209 s / 32,042 rows/s | `AdbcHook.insert_rows` (row-based; dest `price` is float8) |
-| `AdbcArrowTransfer` traditional source | 4.035 s / 247,846 rows/s | `adbc_ingest` into NUMERIC |
-| `AdbcArrowTransfer` ADBC source | 3.371 s / 296,629 rows/s | `adbc_ingest` into NUMERIC (**9.26x** vs stock ADBC `insert_rows`) |
-| `CapabilityGenericTransfer` ADBC source+dest | **2.765 s** / 361,627 rows/s ([BENCHMARK.md](BENCHMARK.md), 2026-11-03, N=1e6) | both-ends `get_record_batches` → `adbc_ingest` (**11.35×** vs stock ADBC `insert_rows`) |
+| Stock `GenericTransfer` traditional | 14.320 s / 69,834 rows/s | `PostgresHook.insert_rows` |
+| Stock `GenericTransfer` ODBC dest | 60.513 s / 16,525 rows/s | `OdbcHook.insert_rows` (row-based; dest `price` is float8) |
+| Stock `GenericTransfer` ADBC dest | 28.443 s / 35,158 rows/s | `AdbcHook.insert_rows` (row-based; dest `price` is float8) |
+| `AdbcArrowTransfer` traditional source | 4.209 s / 237,606 rows/s | `adbc_ingest` into NUMERIC |
+| `AdbcArrowTransfer` ADBC source | 3.409 s / 293,306 rows/s | `adbc_ingest` into NUMERIC (**8.34×** vs stock ADBC GT in the matrix DAG) |
+| `CapabilityGenericTransfer` ADBC source+dest | **2.765 s** / 361,627 rows/s ([BENCHMARK.md](BENCHMARK.md) section 1, dedicated DAG) | both-ends `get_record_batches` → `adbc_ingest` (**11.35×** vs stock ADBC GT) |
+
+Matrix-DAG capability task in the same run: 2.670 s (**10.65×** vs that run’s stock ADBC GT 28.443 s). Cite 11.35× from the dedicated three-way DAG, not from ODBC.
 
 ### Other hook-level / file-engine results
 
@@ -164,6 +180,8 @@ Same Airflow transfer-operator interface (`source_conn_id`, `destination_conn_id
 | DuckDB select (file) | 0.691 s / 1,448,040 rows/s (`fetchall`) | 0.178 s / 5,623,198 rows/s (Arrow table) | 3.88x |
 | SQLite insert (file) | 1.078 s / 927,566 rows/s (`executemany`) | 0.813 s / 1,229,461 rows/s (Arrow ingest) | 1.33x |
 | SQLite select (file) | 0.893 s / 1,120,081 rows/s (`fetchall`) | 0.354 s / 2,822,360 rows/s (Arrow table) | 2.52x |
+
+Phase-2 DuckDB multi-engine (`bench_capability_duckdb`, 2026-11-03, N=1e6, [BENCHMARK.md](BENCHMARK.md) section 3): DuckDB→DuckDB 0.428 s; DuckDB→Postgres Adbc 1.989 s; Postgres Adbc→DuckDB 0.925 s. All verified. DuckDB row-path `executemany` was skipped (~10+ min).
 
 `SQLExecuteQueryOperator` is server-side `INSERT...SELECT`, so hook choice barely moves the number. DuckDB traditional insert is `executemany` of 1e6 Python tuples vs one Arrow ingest. Re-run locally: hardware and cache state will move the digits.
 
@@ -219,6 +237,14 @@ Footnotes only: different code path (callable vs operator), extra transform on t
 - `AdbcArrowTransfer` `postgres_adbc` → `postgres_adbc` (dest-only ingest, kept for continuity)
 - Untimed `verify_capability_loads` requires COUNT == N and payload digest equal to `bench_source` on all three dests
 
+`bench_capability_duckdb` (timed tasks serialized; dedicated file `include/data/bench_cap.duckdb`):
+
+- `DuckDBArrowCapabilityAdapter` → `DuckDBArrowCapabilityAdapter` (same-file table copy, one connection because DuckDB takes an exclusive file lock)
+- Native DuckDB Arrow adapter → Postgres `AdbcHook` (`adbc_ingest`)
+- Postgres `AdbcHook` RecordBatches → native DuckDB `from_arrow`
+- Untimed verify: Postgres dest `bench_cap_ddb_to_pg` payload equals `bench_source`; DuckDB dests match the DuckDB source table
+- DuckDB row-path `executemany` of 1e6 tuples is **not** timed here (see `bench_duckdb` traditional insert)
+
 ### AIP Phase-2 local stub (not upstream)
 
 Nothing in `include/` is installed into apache/airflow. The prototype is:
@@ -228,7 +254,7 @@ Nothing in `include/` is installed into apache/airflow. The prototype is:
 3. `include/adapters/duckdb.py` — native DuckDB `to_arrow_reader` / `from_arrow` (file engine; same protocols)
 4. `include/operators/capability_generic_transfer.py` — if both ends `isinstance` Readable+Writable → columnar, else stock row path
 
-What this proves for the AIP discussion: a GenericTransfer-shaped operator can move Arrow RecordBatches end-to-end when **both** hooks advertise the capability, and the dest row count / payload digest still match `bench_source` (faster is not fewer rows). Dest-only ingest (`AdbcArrowTransfer`) is a different claim and stays in the matrix. Measured N=1e6 numbers: [BENCHMARK.md](BENCHMARK.md).
+What this proves for the AIP discussion: a GenericTransfer-shaped operator can move Arrow RecordBatches end-to-end when **both** hooks advertise the capability, and the dest row count / payload digest still match `bench_source` (faster is not fewer rows). Dest-only ingest (`AdbcArrowTransfer`) is a different claim and stays in the matrix. The same helper also works across engines (`DuckDBArrowCapabilityAdapter` ↔ Postgres Adbc in `bench_capability_duckdb`). Measured N=1e6 numbers: [BENCHMARK.md](BENCHMARK.md).
 
 `bench_transfer` also has untimed `verify_transfer_loads` after the hook ETL / Arrow copy tasks.
 
@@ -239,7 +265,8 @@ Task success is not enough: dest tables are queried in PostgreSQL (`COUNT(*)`, a
 **Verified (must match `BENCH_ROW_COUNT` / `get_bench_row_count()`):**
 
 - Every operator dest in `bench_sql_operators`, plus `bench_source`
-- Copy paths that read the same extract SQL with no transform — `SQLExecuteQueryOperator` (postgres/odbc/adbc), stock `GenericTransfer` postgres, both `AdbcArrowTransfer` dests, `CapabilityGenericTransfer` Adbc dest, `SQLBulkLoadOperator`, and all three dests in `bench_capability_transfer` — payload equals `bench_source` (`product_name`, `category`, `quantity`, `created_at`, `price`)
+- Copy paths that read the same extract SQL with no transform — `SQLExecuteQueryOperator` (postgres/odbc/adbc), stock `GenericTransfer` postgres, both `AdbcArrowTransfer` dests, `CapabilityGenericTransfer` Adbc dest, `SQLBulkLoadOperator`, all three dests in `bench_capability_transfer`, and `bench_cap_ddb_to_pg` in `bench_capability_duckdb` — payload equals `bench_source` (`product_name`, `category`, `quantity`, `created_at`, `price`)
+- `bench_capability_duckdb` DuckDB dests (`bench_cap_ddb_to_ddb`, `bench_cap_pg_to_ddb`) are compared in DuckDB against the DuckDB source table (COUNT + SUM(quantity) + ordered md5)
 - Stock `GenericTransfer` ODBC/ADBC dests (including `bench_cap_gt_adbc`) store `price` as float8 (`FLOAT8_DEST_TABLES`). They are still compared to `bench_source` with `CAST(price AS numeric(10, 2))` plus the other payload columns
 - `bench_transfer`: `COUNT(*)` on `bench_dest_traditional`, `bench_dest_adbc`, `bench_dest_arrow`; Arrow dest payload equals `bench_source` (copy, no transform)
 
@@ -347,6 +374,7 @@ hook = AdbcHook(adbc_conn_id='postgres_adbc')
 │   ├── bench_transfer.py          # Hook ETL (Python callable; not GenericTransfer)
 │   ├── bench_sql_operators.py     # Stock SQL+transfer ops × postgres/odbc/adbc + AdbcArrowTransfer + CapabilityGenericTransfer
 │   ├── bench_capability_transfer.py  # AIP Phase-2: stock GT row path vs both-ends RecordBatch
+│   ├── bench_capability_duckdb.py    # AIP Phase-2 multi-engine: DuckDB <-> Postgres
 │   ├── bench_duckdb.py            # File-backed DuckDB
 │   └── bench_sqlite.py            # File-backed SQLite
 ├── include/
@@ -361,7 +389,7 @@ hook = AdbcHook(adbc_conn_id='postgres_adbc')
 │   ├── run_bench.sh
 │   ├── setup_connections.sh
 │   └── wait_for_airflow.sh
-├── BENCHMARK.md                   # Measured Phase-2 timings (compose run)
+├── BENCHMARK.md                   # Measured Phase-2 / operator-matrix / DuckDB timings
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt
