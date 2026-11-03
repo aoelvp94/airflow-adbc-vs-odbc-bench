@@ -228,7 +228,7 @@ Nothing in `include/` is installed into apache/airflow. The prototype is:
 3. `include/adapters/duckdb.py` — native DuckDB `to_arrow_reader` / `from_arrow` (file engine; same protocols)
 4. `include/operators/capability_generic_transfer.py` — if both ends `isinstance` Readable+Writable → columnar, else stock row path
 
-What this proves for the AIP discussion: a GenericTransfer-shaped operator can move Arrow RecordBatches end-to-end when **both** hooks advertise the capability, and the dest row count / payload digest still match `bench_source` (faster is not fewer rows). Dest-only ingest (`AdbcArrowTransfer`) is a different claim and stays in the matrix.
+What this proves for the AIP discussion: a GenericTransfer-shaped operator can move Arrow RecordBatches end-to-end when **both** hooks advertise the capability, and the dest row count / payload digest still match `bench_source` (faster is not fewer rows). Dest-only ingest (`AdbcArrowTransfer`) is a different claim and stays in the matrix. Measured N=1e6 numbers: [BENCHMARK.md](BENCHMARK.md).
 
 `bench_transfer` also has untimed `verify_transfer_loads` after the hook ETL / Arrow copy tasks.
 
