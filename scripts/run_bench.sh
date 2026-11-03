@@ -115,6 +115,7 @@ airflow_cli dags unpause bench_bulk_insert
 airflow_cli dags unpause bench_bulk_select
 airflow_cli dags unpause bench_transfer
 airflow_cli dags unpause bench_sql_operators
+airflow_cli dags unpause bench_capability_transfer
 airflow_cli dags unpause bench_duckdb
 airflow_cli dags unpause bench_sqlite
 echo ""
@@ -131,7 +132,10 @@ echo ""
 trigger_and_wait "bench_transfer" "Transfer Benchmark (hook ETL, Postgres)" || failures=$((failures + 1))
 echo ""
 
-trigger_and_wait "bench_sql_operators" "SQL+transfer operators (SQLExecuteQuery, SQLInsertRows, SQLBulkLoad, GenericTransfer, AdbcArrowTransfer; postgres/odbc/adbc)" || failures=$((failures + 1))
+trigger_and_wait "bench_sql_operators" "SQL+transfer operators (SQLExecuteQuery, SQLInsertRows, SQLBulkLoad, GenericTransfer, AdbcArrowTransfer, CapabilityGenericTransfer; postgres/odbc/adbc)" || failures=$((failures + 1))
+echo ""
+
+trigger_and_wait "bench_capability_transfer" "AIP Phase-2 capability transfer (stock GT row path vs both-ends RecordBatch vs AdbcArrowTransfer)" || failures=$((failures + 1))
 echo ""
 
 trigger_and_wait "bench_duckdb" "DuckDB file-backed (duckdb API vs ADBC)" || failures=$((failures + 1))
@@ -178,7 +182,8 @@ if [ -f include/results/bench_operator_matrix.json ]; then
         "SQLInsertRowsOperator    postgres=\(.sql_insert_rows_operator.postgres | fmt)  odbc=\(.sql_insert_rows_operator.odbc | fmt)  adbc=\(.sql_insert_rows_operator.adbc | fmt)",
         "SQLBulkLoadOperator      postgres=\(.sql_bulk_load_operator.postgres | fmt)  odbc=\(.sql_bulk_load_operator.odbc | fmt)  adbc=\(.sql_bulk_load_operator.adbc | fmt)",
         "GenericTransfer          postgres=\(.generic_transfer.postgres | fmt)  odbc=\(.generic_transfer.odbc | fmt)  adbc=\(.generic_transfer.adbc | fmt)",
-        "AdbcArrowTransfer        from_postgres=\(.adbc_arrow_transfer.from_postgres | fmt)  from_adbc=\(.adbc_arrow_transfer.from_adbc | fmt)"
+        "AdbcArrowTransfer        from_postgres=\(.adbc_arrow_transfer.from_postgres | fmt)  from_adbc=\(.adbc_arrow_transfer.from_adbc | fmt)",
+        "CapabilityGenericTransfer adbc_both_ends=\(.capability_generic_transfer.adbc_both_ends | fmt)"
     ' include/results/bench_operator_matrix.json
     echo ""
 fi
@@ -188,15 +193,28 @@ print_pair "include/results/bench_sql_insert_rows.json" "SQLInsertRowsOperator (
 print_pair "include/results/bench_generic_transfer.json" "Stock GenericTransfer (dest insert_rows)"
 
 if [ -f include/results/bench_arrow_transfer.json ]; then
-    echo "--- Stock GenericTransfer vs AdbcArrowTransfer ---"
+    echo "--- Stock GenericTransfer vs AdbcArrowTransfer vs CapabilityGenericTransfer ---"
     jq -r '
         "Stock GenericTransfer traditional: \(.stock_generic_transfer_traditional.duration_seconds)s  \(.stock_generic_transfer_traditional.rows_per_second) rows/s",
         "Stock GenericTransfer ODBC dest:   \(.stock_generic_transfer_odbc.duration_seconds)s  \(.stock_generic_transfer_odbc.rows_per_second) rows/s",
         "Stock GenericTransfer ADBC dest:   \(.stock_generic_transfer_adbc_insert_rows.duration_seconds)s  \(.stock_generic_transfer_adbc_insert_rows.rows_per_second) rows/s",
         "AdbcArrowTransfer traditional src: \(.adbc_arrow_transfer_from_traditional.duration_seconds)s  \(.adbc_arrow_transfer_from_traditional.rows_per_second) rows/s",
         "AdbcArrowTransfer ADBC source:     \(.adbc_arrow_transfer_from_adbc.duration_seconds)s  \(.adbc_arrow_transfer_from_adbc.rows_per_second) rows/s",
-        "Speedup vs stock ADBC insert_rows: \(.speedup_vs_stock_adbc_insert_rows)x"
+        "CapabilityGenericTransfer both-ends: \(.capability_generic_transfer_adbc_columnar.duration_seconds)s  \(.capability_generic_transfer_adbc_columnar.rows_per_second) rows/s",
+        "Speedup vs stock ADBC insert_rows: \(.speedup_vs_stock_adbc_insert_rows)x",
+        "Speedup capability vs stock ADBC GT: \(.speedup_capability_vs_stock_adbc_gt)x"
     ' include/results/bench_arrow_transfer.json
+    echo ""
+fi
+
+if [ -f include/results/bench_capability_transfer.json ]; then
+    echo "--- AIP Phase-2: stock GenericTransfer vs both-ends RecordBatch ---"
+    jq -r '
+        "Stock GenericTransfer ADBC (row path): \(.stock_generic_transfer_adbc_row_path.duration_seconds)s  \(.stock_generic_transfer_adbc_row_path.rows_per_second) rows/s",
+        "CapabilityGenericTransfer ADBC (columnar): \(.capability_generic_transfer_adbc_columnar.duration_seconds)s  \(.capability_generic_transfer_adbc_columnar.rows_per_second) rows/s",
+        "AdbcArrowTransfer dest ingest (continuity): \(.adbc_arrow_transfer_dest_ingest.duration_seconds)s  \(.adbc_arrow_transfer_dest_ingest.rows_per_second) rows/s",
+        "Speedup columnar vs stock GT: \(.speedup_columnar_vs_stock_gt)x"
+    ' include/results/bench_capability_transfer.json
     echo ""
 fi
 

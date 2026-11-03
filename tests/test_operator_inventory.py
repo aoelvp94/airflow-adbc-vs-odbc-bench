@@ -15,10 +15,12 @@ from airflow.providers.common.sql.operators.sql import (
     SQLValueCheckOperator,
 )
 from operators.adbc_arrow_transfer import AdbcArrowTransfer
+from operators.capability_generic_transfer import CapabilityGenericTransfer
 
 
 def test_measured_operators_exist():
     assert issubclass(AdbcArrowTransfer, GenericTransfer)
+    assert issubclass(CapabilityGenericTransfer, GenericTransfer)
     for cls in (
         SQLExecuteQueryOperator,
         SQLInsertRowsOperator,

@@ -12,7 +12,7 @@ from airflow.providers.apache.arrow.hooks.adbc import AdbcHook
 from airflow.providers.common.sql.operators.generic_transfer import GenericTransfer
 from airflow.sdk import DAG
 
-from operators.adbc_arrow_transfer import AdbcArrowTransfer
+from operators.adbc_arrow_transfer import AdbcArrowTransfer, prepare_ingest_batch
 
 SAMPLE_ROWS = [
     ("Widget", "Toys", Decimal("10.50"), 3, datetime(2024, 1, 1)),
@@ -129,3 +129,19 @@ def test_stock_generic_transfer_uses_insert_rows_not_adbc_ingest(dag):
     assert list(insert_kwargs["rows"]) == SAMPLE_ROWS
     ingest.assert_not_called()
     dest.get_conn.assert_not_called()
+
+
+def test_prepare_ingest_batch_casts_quantity_and_price():
+    table = pa.table(
+        {
+            "product_name": pa.array(["Widget"]),
+            "category": pa.array(["Toys"]),
+            "price": pa.array([10.5], type=pa.float64()),
+            "quantity": pa.array([3], type=pa.int64()),
+            "created_at": pa.array([datetime(2024, 1, 1)]),
+        }
+    )
+    out = prepare_ingest_batch(table.to_batches()[0], TARGET_FIELDS)
+    assert pa.types.is_int32(out.schema.field("quantity").type)
+    assert pa.types.is_decimal(out.schema.field("price").type)
+    assert out.num_rows == 1

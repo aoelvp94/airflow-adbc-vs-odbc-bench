@@ -116,6 +116,44 @@ CREATE TABLE IF NOT EXISTS bench_op_xfer_arrow_from_adbc (
     created_at TIMESTAMP
 );
 
+-- CapabilityGenericTransfer dest (NUMERIC; both-ends RecordBatch ingest)
+CREATE TABLE IF NOT EXISTS bench_op_xfer_capability_adbc (
+    id SERIAL PRIMARY KEY,
+    product_name VARCHAR(100),
+    category VARCHAR(50),
+    price NUMERIC(10, 2),
+    quantity INTEGER,
+    created_at TIMESTAMP
+);
+
+-- AIP Phase-2 dedicated DAG dests
+CREATE TABLE IF NOT EXISTS bench_cap_gt_adbc (
+    id SERIAL PRIMARY KEY,
+    product_name VARCHAR(100),
+    category VARCHAR(50),
+    price NUMERIC(10, 2),
+    quantity INTEGER,
+    created_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS bench_cap_columnar (
+    id SERIAL PRIMARY KEY,
+    product_name VARCHAR(100),
+    category VARCHAR(50),
+    price NUMERIC(10, 2),
+    quantity INTEGER,
+    created_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS bench_cap_arrow (
+    id SERIAL PRIMARY KEY,
+    product_name VARCHAR(100),
+    category VARCHAR(50),
+    price NUMERIC(10, 2),
+    quantity INTEGER,
+    created_at TIMESTAMP
+);
+
 -- Grant all privileges to benchuser
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO benchuser;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO benchuser;

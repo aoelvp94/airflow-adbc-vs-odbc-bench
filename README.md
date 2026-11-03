@@ -2,11 +2,13 @@
 
 Local Airflow 3.3.2 demo of `AdbcHook` as an **opt-in** beside `OdbcHook` / `DbApiHook` (here, `PostgresHook`), not a replacement. Choose the path from workload and driver availability.
 
-Hook-level DAGs call hooks from `PythonOperator`. Operator-level DAG `bench_sql_operators` runs the same SQL / same N through every stock `common.sql` SQL and transfer operator that applies to Postgres↔Postgres, plus ODBC (`OdbcHook`) and custom `AdbcArrowTransfer`.
+Hook-level DAGs call hooks from `PythonOperator`. Operator-level DAG `bench_sql_operators` runs the same SQL / same N through every stock `common.sql` SQL and transfer operator that applies to Postgres↔Postgres, plus ODBC (`OdbcHook`), custom `AdbcArrowTransfer`, and the local AIP Phase-2 `CapabilityGenericTransfer`. `bench_capability_transfer` is the focused three-way (stock GenericTransfer row path vs both-ends RecordBatch vs dest-only Arrow ingest).
 
 ## TL;DR
 
 Stock `GenericTransfer` / `SQLInsertRowsOperator` still dest-write with `insert_rows` even when `conn_type=adbc` (no `adbc_ingest`).
+
+This repo also prototypes **AIP Phase-2** locally (not upstream): `RecordBatchReadable` / `RecordBatchWritable` protocols plus `CapabilityGenericTransfer`. When **both** hooks advertise Arrow read/write, the helper streams RecordBatches end-to-end; otherwise it uses the stock `get_records` → `insert_rows` path. `AdbcArrowTransfer` remains the dest-only ingest comparison.
 
 N=1e6 from [Sample timings](#sample-timings-measured):
 
@@ -50,14 +52,14 @@ Snowflake, BigQuery, and Databricks are out of scope. This repo does not require
 
 ## Stock operator coverage (`common.sql` 2.1.1)
 
-Goal: stock operator + traditional hook vs stock operator + ADBC hook vs Arrow-aware operator, same SQL / same N where applicable. **No invented operators.**
+Goal: stock operator + traditional hook vs stock operator + ADBC hook vs Arrow-aware operator, same SQL / same N where applicable. Stock names are not invented. `AdbcArrowTransfer` and `CapabilityGenericTransfer` are **local demo operators** in this repo (not apache/airflow).
 
 | Operator | PostgresHook | OdbcHook | AdbcHook | Arrow-aware | In `run_bench.sh` |
 | --- | --- | --- | --- | --- | --- |
 | `SQLExecuteQueryOperator` | Yes | Yes | Yes | n/a (server SQL) | Yes |
 | `SQLInsertRowsOperator` | Yes | Yes | Yes | no stock Arrow insert-from-Python operator | Yes |
 | `SQLBulkLoadOperator` | Yes (`COPY FROM STDIN`) | **N/A** (`OdbcHook.bulk_load` is `NotImplementedError`) | **N/A** (`AdbcHook.bulk_load` is `NotImplementedError`) | n/a | Yes (Postgres only) |
-| `GenericTransfer` | Yes (`get_records` + `insert_rows`) | Yes | Yes (still dest `insert_rows`) | custom `AdbcArrowTransfer` (`adbc_ingest`) | Yes |
+| `GenericTransfer` | Yes (`get_records` + `insert_rows`) | Yes | Yes (still dest `insert_rows`) | custom `AdbcArrowTransfer` (`adbc_ingest`); local `CapabilityGenericTransfer` (both-ends RecordBatch) | Yes |
 | `@task.sql` | same execute path as `SQLExecuteQueryOperator` | same | same | n/a | No (duplicate) |
 | `SQLCheckOperator` / `SQLColumnCheckOperator` / `SQLTableCheckOperator` / `SQLValueCheckOperator` / `SQLIntervalCheckOperator` / `SQLThresholdCheckOperator` | data-quality assertions, not bulk SQL/transfer | — | — | — | No |
 | `BranchSQLOperator` | control flow, not transfer | — | — | — | No |
@@ -70,7 +72,8 @@ Goal: stock operator + traditional hook vs stock operator + ADBC hook vs Arrow-a
 | --- | --- | --- |
 | Hook | `bench_bulk_insert`, `bench_bulk_select`, `bench_transfer` | `PostgresHook` vs `AdbcHook` inside Python callables (insert_rows / fetchall vs Arrow ingest / `fetch_arrow_table`; hand-rolled ETL) |
 | Hook (local file) | `bench_duckdb`, `bench_sqlite` | Native Python API vs ADBC on a file in the compose volume |
-| Operator | `bench_sql_operators` | Stock `SQLExecuteQueryOperator`, `SQLInsertRowsOperator`, `SQLBulkLoadOperator`, `GenericTransfer` on postgres / odbc / adbc connections; custom `AdbcArrowTransfer` dest `adbc_ingest`. Timed tasks run **serially** on LocalExecutor. Untimed `verify_operator_loads` runs after the matrix and is not in `BenchmarkTimer` / `on_success_callback` durations. |
+| Operator | `bench_sql_operators` | Stock `SQLExecuteQueryOperator`, `SQLInsertRowsOperator`, `SQLBulkLoadOperator`, `GenericTransfer` on postgres / odbc / adbc connections; custom `AdbcArrowTransfer` dest `adbc_ingest`; local `CapabilityGenericTransfer` (Adbc source + Adbc dest RecordBatch path). Timed tasks run **serially** on LocalExecutor. Untimed `verify_operator_loads` runs after the matrix and is not in `BenchmarkTimer` / `on_success_callback` durations. |
+| Operator (AIP Phase-2) | `bench_capability_transfer` | Stock `GenericTransfer` ADBC row path vs `CapabilityGenericTransfer` both-ends RecordBatch vs `AdbcArrowTransfer` dest ingest. Same SQL / same N. Post-load COUNT + payload digest vs `bench_source`. |
 
 ## Stack
 
@@ -109,7 +112,18 @@ docker compose up -d --build
 
 JSON under `include/results/` is gitignored and overwritten by `run_bench.sh`. UI: http://localhost:8080 (user `airflow` / `airflow`).
 
-Operator unit tests (no Postgres): `PYTHONPATH=include pytest tests/ -q`.
+Operator unit tests (no Postgres; DuckDB in-memory for the native Arrow adapter): `PYTHONPATH=include pytest tests/ -q`.
+
+To run **only** the AIP Phase-2 comparison after the stack is up:
+
+```bash
+./scripts/wait_for_airflow.sh
+./scripts/setup_connections.sh
+docker exec "$(docker compose ps -q airflow-apiserver)" airflow dags unpause bench_capability_transfer
+docker exec "$(docker compose ps -q airflow-apiserver)" airflow dags trigger bench_capability_transfer
+```
+
+JSON: `include/results/bench_capability_transfer.json`. Compose is required for the timed DAG (PostgreSQL 18 + Airflow); CI runs unit tests and DAG import only, not the full 1e6-row compose bench.
 
 ## Sample timings (measured)
 
@@ -122,13 +136,13 @@ Single run on 2026-10-28, docker compose on a Cursor cloud VM: 4 vCPU Intel Xeon
 | `SQLExecuteQueryOperator` | 2.532 s / 394,909 rows/s | 2.487 s / 402,129 rows/s | 2.459 s / 406,703 rows/s | n/a (server `INSERT...SELECT`) |
 | `SQLInsertRowsOperator` | 11.781 s / 84,883 rows/s | 59.047 s / 16,936 rows/s | 28.453 s / 35,146 rows/s | none (stock) |
 | `SQLBulkLoadOperator` | 1.611 s / 620,801 rows/s (`COPY`) | N/A (`bulk_load` NotImplementedError) | N/A (`bulk_load` NotImplementedError) | n/a |
-| `GenericTransfer` | 14.584 s / 68,570 rows/s | 65.187 s / 15,341 rows/s | 31.209 s / 32,042 rows/s | `AdbcArrowTransfer` below |
+| `GenericTransfer` | 14.584 s / 68,570 rows/s | 65.187 s / 15,341 rows/s | 31.209 s / 32,042 rows/s | `AdbcArrowTransfer` / `CapabilityGenericTransfer` below |
 
 Server-side `SQLExecuteQueryOperator` barely moves with hook choice. Row `insert_rows` (SQLInsertRows / GenericTransfer) is slowest on ODBC, then ADBC, then libpq. Native `COPY` is the fastest stock load on Postgres.
 
 ### Stock GenericTransfer vs AdbcArrowTransfer
 
-Same Airflow transfer-operator interface (`source_conn_id`, `destination_conn_id`, SQL, dest table). Stock `GenericTransfer` always dest-writes with `insert_rows`, even when the connection type is `adbc` or `odbc`. Custom `AdbcArrowTransfer` (`include/operators/adbc_arrow_transfer.py`) dest-writes with `cursor.adbc_ingest`.
+Same Airflow transfer-operator interface (`source_conn_id`, `destination_conn_id`, SQL, dest table). Stock `GenericTransfer` always dest-writes with `insert_rows`, even when the connection type is `adbc` or `odbc`. Custom `AdbcArrowTransfer` (`include/operators/adbc_arrow_transfer.py`) dest-writes with `cursor.adbc_ingest` (source may still be row-based). Local `CapabilityGenericTransfer` (`include/operators/capability_generic_transfer.py`) streams RecordBatches only when **both** wrapped hooks advertise the Phase-2 protocols.
 
 | Path | Time | Dest write |
 | --- | --- | --- |
@@ -137,6 +151,7 @@ Same Airflow transfer-operator interface (`source_conn_id`, `destination_conn_id
 | Stock `GenericTransfer` ADBC dest | 31.209 s / 32,042 rows/s | `AdbcHook.insert_rows` (row-based; dest `price` is float8) |
 | `AdbcArrowTransfer` traditional source | 4.035 s / 247,846 rows/s | `adbc_ingest` into NUMERIC |
 | `AdbcArrowTransfer` ADBC source | 3.371 s / 296,629 rows/s | `adbc_ingest` into NUMERIC (**9.26x** vs stock ADBC `insert_rows`) |
+| `CapabilityGenericTransfer` ADBC source+dest | *run `bench_capability_transfer`* | both-ends `get_record_batches` → `adbc_ingest` (Phase-2 stub; not in the 2026-10-28 sample) |
 
 ### Other hook-level / file-engine results
 
@@ -181,7 +196,7 @@ Footnotes only: different code path (callable vs operator), extra transform on t
 
 - Traditional: read rows, 10% discount, `insert_rows`
 - ADBC: Arrow table, Arrow compute, Arrow write
-- Also runs `AdbcArrowTransfer` as a side task (copy, no transform). That duration is a footnote, not a peer of stock `GenericTransfer`.
+- Also runs `AdbcArrowTransfer` as a side task (copy, no transform). That duration is a footnote, not a peer of stock `GenericTransfer`. Stock `GenericTransfer` vs both-ends RecordBatch lives in `bench_capability_transfer` / `bench_sql_operators`.
 
 ### Operator-level (Postgres libpq / ODBC / ADBC)
 
@@ -192,8 +207,27 @@ Footnotes only: different code path (callable vs operator), extra transform on t
 - `SQLBulkLoadOperator` on `postgres_traditional` only (`COPY FROM STDIN` from a TSV of `bench_source`)
 - Stock `GenericTransfer` on each protocol pair (`get_records` + dest `insert_rows`)
 - Custom `AdbcArrowTransfer` from traditional source and from ADBC source; dest is always `adbc_ingest` into NUMERIC
+- Local `CapabilityGenericTransfer` Adbc source + Adbc dest (both-ends RecordBatch stream; falls back to `get_records` + `insert_rows` if either end lacks the protocols)
 - Durations are Airflow `TaskInstance.duration`, except `SQLInsertRowsOperator` which records `execute()` wall time after row generation
 - After timed tasks, untimed `verify_operator_loads` checks dest tables (see **Post-load verification**)
+
+`bench_capability_transfer` (timed tasks serialized):
+
+- Stock `GenericTransfer` `postgres_adbc` → `postgres_adbc` (row path baseline; dest `price` is float8)
+- `CapabilityGenericTransfer` `postgres_adbc` → `postgres_adbc` (columnar path: `fetch_record_batch` → `adbc_ingest`)
+- `AdbcArrowTransfer` `postgres_adbc` → `postgres_adbc` (dest-only ingest, kept for continuity)
+- Untimed `verify_capability_loads` requires COUNT == N and payload digest equal to `bench_source` on all three dests
+
+### AIP Phase-2 local stub (not upstream)
+
+Nothing in `include/` is installed into apache/airflow. The prototype is:
+
+1. `include/protocols/arrow_capabilities.py` — `@runtime_checkable RecordBatchReadable.get_record_batches(sql)` and `RecordBatchWritable.insert_record_batches(table, batches, ...)`
+2. `include/adapters/adbc.py` — wraps a live `AdbcHook` (no site-packages patch) using `cursor.fetch_record_batch` / `cursor.adbc_ingest`
+3. `include/adapters/duckdb.py` — native DuckDB `to_arrow_reader` / `from_arrow` (file engine; same protocols)
+4. `include/operators/capability_generic_transfer.py` — if both ends `isinstance` Readable+Writable → columnar, else stock row path
+
+What this proves for the AIP discussion: a GenericTransfer-shaped operator can move Arrow RecordBatches end-to-end when **both** hooks advertise the capability, and the dest row count / payload digest still match `bench_source` (faster is not fewer rows). Dest-only ingest (`AdbcArrowTransfer`) is a different claim and stays in the matrix.
 
 `bench_transfer` also has untimed `verify_transfer_loads` after the hook ETL / Arrow copy tasks.
 
@@ -204,8 +238,8 @@ Task success is not enough: dest tables are queried in PostgreSQL (`COUNT(*)`, a
 **Verified (must match `BENCH_ROW_COUNT` / `get_bench_row_count()`):**
 
 - Every operator dest in `bench_sql_operators`, plus `bench_source`
-- Copy paths that read the same extract SQL with no transform — `SQLExecuteQueryOperator` (postgres/odbc/adbc), stock `GenericTransfer` postgres, both `AdbcArrowTransfer` dests, `SQLBulkLoadOperator` — payload equals `bench_source` (`product_name`, `category`, `quantity`, `created_at`, `price`)
-- Stock `GenericTransfer` ODBC/ADBC dests store `price` as float8 (`FLOAT8_DEST_TABLES`). They are still compared to `bench_source` with `CAST(price AS numeric(10, 2))` plus the other payload columns
+- Copy paths that read the same extract SQL with no transform — `SQLExecuteQueryOperator` (postgres/odbc/adbc), stock `GenericTransfer` postgres, both `AdbcArrowTransfer` dests, `CapabilityGenericTransfer` Adbc dest, `SQLBulkLoadOperator`, and all three dests in `bench_capability_transfer` — payload equals `bench_source` (`product_name`, `category`, `quantity`, `created_at`, `price`)
+- Stock `GenericTransfer` ODBC/ADBC dests (including `bench_cap_gt_adbc`) store `price` as float8 (`FLOAT8_DEST_TABLES`). They are still compared to `bench_source` with `CAST(price AS numeric(10, 2))` plus the other payload columns
 - `bench_transfer`: `COUNT(*)` on `bench_dest_traditional`, `bench_dest_adbc`, `bench_dest_arrow`; Arrow dest payload equals `bench_source` (copy, no transform)
 
 **Intentionally not equal (COUNT only, documented):**
@@ -310,12 +344,15 @@ hook = AdbcHook(adbc_conn_id='postgres_adbc')
 │   ├── bench_bulk_insert.py       # Hook insert (Postgres)
 │   ├── bench_bulk_select.py       # Hook select (Postgres)
 │   ├── bench_transfer.py          # Hook ETL (Python callable; not GenericTransfer)
-│   ├── bench_sql_operators.py     # Stock SQL+transfer ops × postgres/odbc/adbc + AdbcArrowTransfer
+│   ├── bench_sql_operators.py     # Stock SQL+transfer ops × postgres/odbc/adbc + AdbcArrowTransfer + CapabilityGenericTransfer
+│   ├── bench_capability_transfer.py  # AIP Phase-2: stock GT row path vs both-ends RecordBatch
 │   ├── bench_duckdb.py            # File-backed DuckDB
 │   └── bench_sqlite.py            # File-backed SQLite
 ├── include/
+│   ├── adapters/                  # AdbcHook / DuckDB wrappers (do not patch providers)
 │   ├── data/                      # DuckDB / SQLite files
-│   ├── operators/                 # AdbcArrowTransfer (GenericTransfer + adbc_ingest)
+│   ├── operators/                 # AdbcArrowTransfer; CapabilityGenericTransfer
+│   ├── protocols/                 # RecordBatchReadable / RecordBatchWritable
 │   ├── results/                   # JSON outputs
 │   └── utils/                     # timers, generators, post-load verify_load
 ├── tests/                         # pytest: operators + verify helpers (no Postgres)
