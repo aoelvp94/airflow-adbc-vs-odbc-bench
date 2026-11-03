@@ -36,7 +36,7 @@ jobs:
           flake8 dags/ include/operators/ include/adapters/ include/protocols/ --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 dags/ include/operators/ include/adapters/ include/protocols/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
-      - name: Unit test AdbcArrowTransfer vs GenericTransfer
+      - name: Unit test operators and adapters
         run: |
           pip install pytest
           PYTHONPATH=include pytest tests/ -q
@@ -59,6 +59,7 @@ jobs:
               'bench_transfer.py',
               'bench_sql_operators.py',
               'bench_capability_transfer.py',
+              'bench_capability_duckdb.py',
               'bench_duckdb.py',
               'bench_sqlite.py',
           ]

@@ -116,6 +116,7 @@ airflow_cli dags unpause bench_bulk_select
 airflow_cli dags unpause bench_transfer
 airflow_cli dags unpause bench_sql_operators
 airflow_cli dags unpause bench_capability_transfer
+airflow_cli dags unpause bench_capability_duckdb
 airflow_cli dags unpause bench_duckdb
 airflow_cli dags unpause bench_sqlite
 echo ""
@@ -136,6 +137,9 @@ trigger_and_wait "bench_sql_operators" "SQL+transfer operators (SQLExecuteQuery,
 echo ""
 
 trigger_and_wait "bench_capability_transfer" "AIP Phase-2 capability transfer (stock GT row path vs both-ends RecordBatch vs AdbcArrowTransfer)" || failures=$((failures + 1))
+echo ""
+
+trigger_and_wait "bench_capability_duckdb" "AIP Phase-2 multi-engine (DuckDB <-> DuckDB, DuckDB <-> Postgres RecordBatch)" || failures=$((failures + 1))
 echo ""
 
 trigger_and_wait "bench_duckdb" "DuckDB file-backed (duckdb API vs ADBC)" || failures=$((failures + 1))
@@ -215,6 +219,21 @@ if [ -f include/results/bench_capability_transfer.json ]; then
         "AdbcArrowTransfer dest ingest (continuity): \(.adbc_arrow_transfer_dest_ingest.duration_seconds)s  \(.adbc_arrow_transfer_dest_ingest.rows_per_second) rows/s",
         "Speedup columnar vs stock GT: \(.speedup_columnar_vs_stock_gt)x"
     ' include/results/bench_capability_transfer.json
+    echo ""
+fi
+
+if [ -f include/results/bench_capability_duckdb.json ]; then
+    echo "--- AIP Phase-2 multi-engine: DuckDB <-> Postgres RecordBatch ---"
+    jq -r '
+        def fmt:
+          if .skipped then "skipped (\(.reason))"
+          else "\(.duration_seconds)s  \(.rows_per_second) rows/s"
+          end;
+        "DuckDB -> DuckDB columnar:     \(.capability_duckdb_to_duckdb | fmt)",
+        "DuckDB -> Postgres Adbc:       \(.capability_duckdb_to_postgres | fmt)",
+        "Postgres Adbc -> DuckDB:       \(.capability_postgres_to_duckdb | fmt)",
+        "DuckDB row-path insert_rows:   \(.stock_row_path_duckdb_insert_rows | fmt)"
+    ' include/results/bench_capability_duckdb.json
     echo ""
 fi
 
